@@ -1,0 +1,8 @@
+CICIOT23/
+DNN-EdgeIIoT-dataset.csv/
+*.csv
+__pycache__/
+*.pyc
+.env
+.claude/
+.gemini/
