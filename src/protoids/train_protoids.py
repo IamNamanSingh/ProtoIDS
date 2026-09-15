@@ -339,6 +339,10 @@ def main():
                        help='Path to pre-trained model for evaluation')
     parser.add_argument('--withhold_open_set', action='store_true',
                        help='True open-set: withhold MITM/VulnScan/BruteForce from TRAINING (HANDOVER §4)')
+    parser.add_argument('--ae_init', type=str, default='',
+                       help='Path to ae_pretrain.pth for encoder init')
+    parser.add_argument('--full_data', action='store_true',
+                       help='Use full 5.5M CICIOT23 train (not 235k dev parquet)')
 
     args = parser.parse_args()
 
@@ -355,7 +359,9 @@ def main():
     # Paths
     data_dir = 'CICIOT23'
     artifact_dir = 'results/baselines'
-    development_subset_path = 'experiments/data/ciciot_dev.parquet'
+    development_subset_path = None if args.full_data else 'experiments/data/ciciot_dev.parquet'
+    if args.full_data:
+        print("Using FULL 5.5M train (CICIOT23/train/train.csv) – not dev parquet")
     model_save_dir = f'experiments/models/{args.experiment_name}'
     results_save_dir = f'experiments/results/{args.experiment_name}'
 
@@ -421,6 +427,13 @@ def main():
         print(f"  - Prototypes: {args.num_prototypes} per class ({num_classes} classes)")
         print(f"  - Embedding dimension: {args.embedding_dim}")
         print(f"  - Compactness loss weight: {args.lambda_compact}")
+        if args.ae_init:
+            print(f"  - Encoder init: loading AE pretrain from {args.ae_init}")
+            ae_ckpt = torch.load(args.ae_init, map_location='cpu')
+            model.encoder.load_state_dict(ae_ckpt['encoder_state'])
+            print(f"    AE encoder loaded (train MSE 0.020 val 0.0033 pretrain)")
+
+
 
         # Initialize prototypes using K-means on training data
         print(f"\nInitializing prototypes using K-means on training data...")

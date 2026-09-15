@@ -212,7 +212,7 @@ def create_data_loaders(data_dir: str, batch_size: int = 256,
         # Also convert data_dir and development_subset_path if they're relative
         if not os.path.isabs(data_dir):
             data_dir = os.path.join(project_root, data_dir)
-        if not os.path.isabs(development_subset_path):
+        if development_subset_path is not None and not os.path.isabs(development_subset_path):
             development_subset_path = os.path.join(project_root, development_subset_path)
 
     # Create datasets (withhold only from train for true open-set)
