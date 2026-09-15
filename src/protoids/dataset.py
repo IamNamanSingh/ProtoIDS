@@ -99,8 +99,9 @@ class CICIoT2023ProtoIDSDataset(Dataset):
         # Convert labels to integers
         y_multi_int = y_multi_df.map(self.label_to_int).values
 
-        # Scale features using the pre-fitted scaler
-        X_scaled = self.scaler.transform(X_df.values).astype(np.float32)
+        # Parquet is already scaled via ciciot_preprocessing.py StandardScaler
+        # Do NOT re-apply scaler (double-scaling → 915k outliers), just clip
+        X_scaled = np.clip(X_df.values, -5, 5).astype(np.float32)
 
         return X_scaled, y_multi_int, None  # Binary labels not needed for ProtoIDS
 
@@ -118,8 +119,9 @@ class CICIoT2023ProtoIDSDataset(Dataset):
         # Convert labels to integers
         y_multi_int = y_multi_df.map(self.label_to_int).values
 
-        # Scale features using the pre-fitted scaler
-        X_scaled = self.scaler.transform(X_df.values).astype(np.float32)
+        # Scale features using the pre-fitted scaler (raw CSV → scaled)
+        X_scaled = self.scaler.transform(X_df.values)
+        X_scaled = np.clip(X_scaled, -5, 5).astype(np.float32)
 
         return X_scaled, y_multi_int, None  # Binary labels not needed for ProtoIDS
 

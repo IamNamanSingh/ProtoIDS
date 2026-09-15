@@ -60,8 +60,9 @@ def classification_loss(distances_per_class, labels, weighting=None):
         loss: Classification loss scalar
     """
     # Convert distances to similarities (using negative distance so smaller distance = larger similarity)
-    # We add a small epsilon to avoid numerical issues
-    similarities = -distances_per_class  # Shape: (batch_size, num_classes)
+    # Scale distances to produce sharp logits for CrossEntropy (cosine distance ∈[0,2] too small otherwise)
+    # This is the critical fix: without scale, softmax is near-uniform and model never learns
+    similarities = -16.0 * distances_per_class  # Shape: (batch_size, num_classes)
 
     # Cross-entropy loss expects raw logits, which similarities can serve as
     loss_fn = nn.CrossEntropyLoss(weight=weighting)

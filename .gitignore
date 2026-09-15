@@ -1,8 +1,15 @@
 CICIOT23/
+CICIOT23.zip
 DNN-EdgeIIoT-dataset.csv/
+DNN-EdgeIIoT-dataset.csv(1).zip
 *.csv
+*.zip
+experiments/models/
+experiments/results/
+.venv/
 __pycache__/
 *.pyc
 .env
 .claude/
 .gemini/
+.basemem.code.db

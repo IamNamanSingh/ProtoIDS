@@ -121,7 +121,7 @@ def main():
 
     # Load preprocessing artifacts
     print("Loading preprocessing artifacts...")
-    _, manifest, label_mapping = load_preprocessing_artifacts(artifact_dir)
+    scaler, manifest, label_mapping = load_preprocessing_artifacts(artifact_dir)
     feature_cols_all = manifest['retained_columns']  # 41 features
     print(f"Number of features in full set: {len(feature_cols_all)}")
 
@@ -172,12 +172,12 @@ def main():
     y_test_multi_int_all = np.array([label_to_int[label] for label in y_test_multi_all])
     y_test_multi_int_b = np.array([label_to_int[label] for label in y_test_multi_b])
 
-    # Experiment A: all features
+    # Experiment A: all features - dev parquet is already scaled with the saved scaler, so reuse it
     print("\nPreprocessing validation and test sets for Experiment A...")
-    scaler_a = StandardScaler()
-    X_train_a = scaler_a.fit_transform(X_dev_all).astype(np.float32)
-    X_val_all = scaler_a.transform(X_val_all_raw).astype(np.float32)
-    X_test_all = scaler_a.transform(X_test_all_raw).astype(np.float32)
+    print("  Using pre-fitted scaler from artifacts; dev set already scaled (no refit).")
+    X_train_a = X_dev_all.astype(np.float32)  # already scaled, do NOT refit
+    X_val_all = scaler.transform(X_val_all_raw).astype(np.float32)
+    X_test_all = scaler.transform(X_test_all_raw).astype(np.float32)
 
     # Train and evaluate Random Forest for Experiment A (all features)
     print("\nTraining Random Forest on Experiment A (all features) with 10 trees...")
@@ -204,11 +204,16 @@ def main():
     print(f"Experiment A - Validation Macro F1: {metrics_a['val_f1_macro']:.4f}")
 
     # Experiment B: without near-constant features
+    # Dev subset is already scaled via the full scaler; X_dev_b is just the column-subset of that scaled data
+    # For validation/test, subset the already-scaled full validation matrix to avoid refitting on double-scaled data
     print("\nPreprocessing validation and test sets for Experiment B...")
-    scaler_b = StandardScaler()
-    X_train_b = scaler_b.fit_transform(X_dev_b).astype(np.float32)
-    X_val_b = scaler_b.transform(X_val_b_raw).astype(np.float32)
-    X_test_b = scaler_b.transform(X_test_b_raw).astype(np.float32)
+    X_train_b = X_dev_b.astype(np.float32)  # already scaled, subset is valid
+    # Derive B-dim validation by selecting the same columns from the full scaled validation
+    # Build index map from full retained columns to B columns
+    col_to_idx = {col: i for i, col in enumerate(feature_cols_all)}
+    keep_idx = [col_to_idx[c] for c in feature_cols_exp_b]
+    X_val_b = X_val_all[:, keep_idx].astype(np.float32)
+    X_test_b = X_test_all[:, keep_idx].astype(np.float32)
 
     # Train and evaluate Random Forest for Experiment B (without near-constant features)
     print("\nTraining Random Forest on Experiment B (without near-constant features) with 10 trees...")

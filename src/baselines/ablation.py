@@ -107,12 +107,17 @@ def main():
     print(f"Number of features in Experiment B: {len(feature_cols_exp_b)}")
     print(f"Removed features: {near_constant_to_remove}")
 
-    # Load development subset (raw)
-    print("Loading development subset...")
-    X_dev_all, y_multi_dev, y_bin_dev = get_development_subset_raw(dev_parquet_path, feature_cols_all)
-    X_dev_b, _, _ = get_development_subset_raw(dev_parquet_path, feature_cols_exp_b)
-    print(f"Development subset shape (all features): {X_dev_all.shape}")
-    print(f"Development subset shape (exp B): {X_dev_b.shape}")
+    # Load development subset (already scaled via saved scaler)
+    print("Loading development subset (already scaled)...")
+    scaler = joblib.load('results/baselines/ciciot_preprocessor.joblib')
+    X_dev_all_df, y_multi_dev, y_bin_dev = get_development_subset_raw(dev_parquet_path, feature_cols_all)
+    X_dev_b_df, _, _ = get_development_subset_raw(dev_parquet_path, feature_cols_exp_b)
+    # Convert to float32 - already scaled
+    X_train_all_scaled = X_dev_all_df.values.astype(np.float32) if hasattr(X_dev_all_df, 'values') else np.array(X_dev_all_df).astype(np.float32)
+    X_train_b_scaled = X_dev_b_df.values.astype(np.float32) if hasattr(X_dev_b_df, 'values') else np.array(X_dev_b_df).astype(np.float32)
+    print(f"Development subset shape (all features): {X_train_all_scaled.shape}")
+    print(f"Development subset shape (exp B): {X_train_b_scaled.shape}")
+    print("  Using pre-fitted scaler; dev set not refit (fixes double-scaling bug)")
 
     # Load and preprocess validation and test sets for Experiment A
     print("Loading and preprocessing validation set for Experiment A...")
@@ -124,26 +129,15 @@ def main():
         os.path.join(data_dir, 'test', 'test.csv'),
         feature_cols_all
     )
-    # Fit scaler on training data (Experiment A) and transform
-    # We'll use the development subset as training for this ablation
-    X_train_all_scaled, X_val_all_scaled, X_test_all_scaled, scaler_a = fit_scaler_and_transform(
-        X_dev_all, X_val_all_raw, X_test_all_raw
-    )
+    X_val_all_scaled = scaler.transform(X_val_all_raw).astype(np.float32)
+    X_test_all_scaled = scaler.transform(X_test_all_raw).astype(np.float32)
 
-    # Load and preprocess validation and test sets for Experiment B
-    print("Loading and preprocessing validation set for Experiment B...")
-    X_val_b_raw, _, _ = load_and_preprocess_split_raw(
-        os.path.join(data_dir, 'validation', 'validation.csv'),
-        feature_cols_exp_b
-    )
-    X_test_b_raw, _, _ = load_and_preprocess_split_raw(
-        os.path.join(data_dir, 'test', 'test.csv'),
-        feature_cols_exp_b
-    )
-    # Fit scaler on training data (Experiment B)
-    X_train_b_scaled, X_val_b_scaled, X_test_b_scaled, scaler_b = fit_scaler_and_transform(
-        X_dev_b, X_val_b_raw, X_test_b_raw
-    )
+    # Load validation/test for Experiment B - derive via subsetting the scaled full validation
+    print("Loading validation set for Experiment B (via subsetting full scaled matrix)...")
+    col_to_idx = {col: i for i, col in enumerate(feature_cols_all)}
+    keep_idx = [col_to_idx[c] for c in feature_cols_exp_b]
+    X_val_b_scaled = X_val_all_scaled[:, keep_idx]
+    X_test_b_scaled = X_test_all_scaled[:, keep_idx]
 
     # Convert labels to integer for multiclass
     label_mapping_path = 'results/baselines/ciciot_label_mapping.json'

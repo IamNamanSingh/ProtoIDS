@@ -17,6 +17,7 @@ from sklearn.metrics import (
 from .dataset import create_data_loaders, CICIoT2023ProtoIDSDataset
 from .protoids_model import ProtoIDS
 from .training import train_protoids
+from torch.utils.data import DataLoader
 
 
 def save_experiment_log(experiment_id: str, config: Dict, metrics: Dict,
@@ -196,7 +197,7 @@ def evaluate_open_set(model, known_loader, unknown_loader, device,
 
             unknown_preds.append(predicted_classes.cpu())
             # Create labels where unknown class is num_classes
-            unknown_labels.append(torch.full_like(batch_y, model.num_classes))
+            unknown_labels.append(torch.full_like(batch_y, model.num_classes).cpu())
 
     unknown_preds = torch.cat(unknown_preds).numpy()
     unknown_labels = torch.cat(unknown_labels).numpy()
@@ -409,6 +410,7 @@ def main():
 
         # Initialize prototypes using K-means on training data
         print(f"\nInitializing prototypes using K-means on training data...")
+        model.to(device)
         model.eval()
         with torch.no_grad():
             # Collect training embeddings and labels
@@ -417,8 +419,8 @@ def main():
 
             for batch_X, batch_y in train_loader:
                 batch_X = batch_X.to(device)
-                embedding, _ = model.encoder(batch_X)
-                all_embeddings.append(embedding.cpu())
+                _, normalized_embedding = model.encoder(batch_X)
+                all_embeddings.append(normalized_embedding.cpu())
                 all_labels.append(batch_y)
 
             all_embeddings = torch.cat(all_embeddings)
