@@ -337,6 +337,8 @@ def main():
                        help='Only run evaluation, skip training')
     parser.add_argument('--model_path', type=str, default='',
                        help='Path to pre-trained model for evaluation')
+    parser.add_argument('--withhold_open_set', action='store_true',
+                       help='True open-set: withhold MITM/VulnScan/BruteForce from TRAINING (HANDOVER §4)')
 
     args = parser.parse_args()
 
@@ -360,13 +362,24 @@ def main():
     os.makedirs(model_save_dir, exist_ok=True)
     os.makedirs(results_save_dir, exist_ok=True)
 
-    # Create data loaders
+    # Create data loaders (with optional true open-set withholding)
+    withheld_for_train = None
+    if args.withhold_open_set:
+        # Resolve indices for MITM-ArpSpoofing, VulnerabilityScan, DictionaryBruteForce
+        import json as _json, joblib as _joblib, os as _os
+        _lm_path = _os.path.join(artifact_dir, 'ciciot_label_mapping.json')
+        with open(_lm_path) as _f: _lm = _json.load(_f)
+        _l2i = _lm['multiclass']['label_to_int']
+        withheld_names = ['MITM-ArpSpoofing', 'VulnerabilityScan', 'DictionaryBruteForce']
+        withheld_for_train = [_l2i[n] for n in withheld_names if n in _l2i]
+        print(f"True open-set enabled: withholding {withheld_names} -> indices {withheld_for_train} from TRAINING")
     print("Loading data...")
     train_loader, val_loader, test_loader, num_classes, input_dim = create_data_loaders(
         data_dir=data_dir,
         batch_size=args.batch_size,
         artifact_dir=artifact_dir,
-        development_subset_path=development_subset_path
+        development_subset_path=development_subset_path,
+        withheld_classes=withheld_for_train
     )
 
     print(f"Dataset loaded:")
@@ -379,12 +392,13 @@ def main():
     # Get class weights if requested
     class_weights = None
     if args.class_weights:
-        # Create a temporary dataset to compute class weights
+        # Create a temporary dataset to compute class weights (respect withholding)
         temp_dataset = CICIoT2023ProtoIDSDataset(
             data_dir=data_dir,
             split='train',
             artifact_dir=artifact_dir,
-            development_subset_path=development_subset_path
+            development_subset_path=development_subset_path,
+            withheld_classes=withheld_for_train
         )
         class_weights = temp_dataset.get_class_weights().to(device)
         print(f"Using class weights: {class_weights}")

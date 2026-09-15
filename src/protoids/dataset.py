@@ -22,8 +22,9 @@ class CICIoT2023ProtoIDSDataset(Dataset):
     """
 
     def __init__(self, data_dir: str, split: str = 'train',
-                 artifact_dir: str = 'results/baselines',
-                 development_subset_path: Optional[str] = None):
+                  artifact_dir: str = 'results/baselines',
+                  development_subset_path: Optional[str] = None,
+                  withheld_classes: Optional[list] = None):
         """
         Initialize the dataset.
 
@@ -32,6 +33,7 @@ class CICIoT2023ProtoIDSDataset(Dataset):
             split: Which split to load ('train', 'validation', or 'test')
             artifact_dir: Directory containing preprocessing artifacts
             development_subset_path: Path to development subset Parquet (for train split only)
+            withheld_classes: Optional list of class indices to exclude (for true open-set retrain)
         """
         self.data_dir = data_dir
         self.split = split
@@ -49,6 +51,14 @@ class CICIoT2023ProtoIDSDataset(Dataset):
         self.X, self.y_multi, self.y_bin = self._load_data(
             development_subset_path if split == 'train' else None
         )
+
+        # True open-set: withhold classes from training (HANDOVER §4)
+        if withheld_classes is not None and len(withheld_classes) > 0:
+            keep_mask = ~np.isin(self.y_multi, withheld_classes)
+            filtered = keep_mask.sum()
+            print(f"Withholding classes {withheld_classes}: {len(self.y_multi)-filtered} samples removed, {filtered} kept for split={self.split}")
+            self.X = self.X[keep_mask]
+            self.y_multi = self.y_multi[keep_mask]
 
         # Convert to tensors
         self.X_tensor = torch.from_numpy(self.X).float()
@@ -173,7 +183,8 @@ class CICIoT2023ProtoIDSDataset(Dataset):
 def create_data_loaders(data_dir: str, batch_size: int = 256,
                        artifact_dir: str = 'results/baselines',
                        development_subset_path: str = 'experiments/data/ciciot_dev.parquet',
-                       val_batch_size: Optional[int] = None):
+                       val_batch_size: Optional[int] = None,
+                       withheld_classes: Optional[list] = None):
     """
     Create data loaders for training, validation, and test sets.
 
@@ -204,12 +215,13 @@ def create_data_loaders(data_dir: str, batch_size: int = 256,
         if not os.path.isabs(development_subset_path):
             development_subset_path = os.path.join(project_root, development_subset_path)
 
-    # Create datasets
+    # Create datasets (withhold only from train for true open-set)
     train_dataset = CICIoT2023ProtoIDSDataset(
         data_dir=data_dir,
         split='train',
         artifact_dir=artifact_dir,
-        development_subset_path=development_subset_path
+        development_subset_path=development_subset_path,
+        withheld_classes=withheld_classes
     )
 
     val_dataset = CICIoT2023ProtoIDSDataset(
