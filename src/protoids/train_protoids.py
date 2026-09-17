@@ -3,10 +3,13 @@ Main training script for ProtoIDS on CICIoT2023 dataset.
 Implements closed-set and open-set evaluation as specified.
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 import numpy as np
 import json
-import os
 import time
 import argparse
 from typing import Dict, Tuple, Optional
@@ -14,9 +17,9 @@ from sklearn.metrics import (
     accuracy_score, f1_score, precision_score, recall_score,
     matthews_corrcoef, roc_auc_score, average_precision_score
 )
-from .dataset import create_data_loaders, CICIoT2023ProtoIDSDataset
-from .protoids_model import ProtoIDS
-from .training import train_protoids
+from protoids.dataset import create_data_loaders, CICIoT2023ProtoIDSDataset
+from protoids.protoids_model import ProtoIDS
+from protoids.training import train_protoids
 from torch.utils.data import DataLoader
 
 
@@ -124,7 +127,7 @@ def evaluate_closed_set(model, data_loader, device, threshold=None):
 
 
 def evaluate_open_set(model, known_loader, unknown_loader, device,
-                     threshold_percentile=90):
+                     threshold_percentile=90, threshold=None):
     """
     Evaluate the model in open-set mode (with unknown class detection).
 
@@ -133,7 +136,8 @@ def evaluate_open_set(model, known_loader, unknown_loader, device,
         known_loader: DataLoader for known class validation data
         unknown_loader: DataLoader for unknown class data
         device: Device to run evaluation on
-        threshold_percentile: Percentile of known distances to use as threshold
+        threshold_percentile: Percentile of known distances to use as threshold (if threshold is None)
+        threshold: Precomputed threshold to use (if provided, overrides threshold_percentile)
 
     Returns:
         metrics: Dictionary containing open-set evaluation metrics
@@ -159,7 +163,10 @@ def evaluate_open_set(model, known_loader, unknown_loader, device,
     known_labels = torch.cat(known_labels).numpy()
 
     # Set threshold as percentile of known distances
-    threshold = np.percentile(known_distances, threshold_percentile)
+    if threshold is None:
+        threshold = np.percentile(known_distances, threshold_percentile)
+    else:
+        threshold = threshold
 
     # Get predictions for known data with threshold
     known_preds = []
@@ -370,6 +377,8 @@ def main():
 
     # Create data loaders (with optional true open-set withholding)
     withheld_for_train = None
+    open_set = False
+    scaler_save_dir = None
     if args.withhold_open_set:
         # Resolve indices for MITM-ArpSpoofing, VulnerabilityScan, DictionaryBruteForce
         import json as _json, joblib as _joblib, os as _os
@@ -379,13 +388,19 @@ def main():
         withheld_names = ['MITM-ArpSpoofing', 'VulnerabilityScan', 'DictionaryBruteForce']
         withheld_for_train = [_l2i[n] for n in withheld_names if n in _l2i]
         print(f"True open-set enabled: withholding {withheld_names} -> indices {withheld_for_train} from TRAINING")
+        open_set = True
+        scaler_save_dir = f'experiments/results/{args.experiment_name}'
+        # For open-set, we do not use the development subset to avoid leakage
+        development_subset_path = None
     print("Loading data...")
     train_loader, val_loader, test_loader, num_classes, input_dim = create_data_loaders(
         data_dir=data_dir,
         batch_size=args.batch_size,
         artifact_dir=artifact_dir,
         development_subset_path=development_subset_path,
-        withheld_classes=withheld_for_train
+        withheld_classes=withheld_for_train,
+        open_set=open_set,
+        scaler_save_dir=scaler_save_dir
     )
 
     print(f"Dataset loaded:")
@@ -654,6 +669,77 @@ def main():
     with open(open_set_path, 'w') as f:
         json.dump(open_set_metrics, f, indent=2)
 
+    # Run open-set evaluation on test set
+    print(f"\nSetting up open-set evaluation on test set...")
+    # We'll use the same withheld class indices as before
+    # Load test dataset
+    test_dataset = CICIoT2023ProtoIDSDataset(
+        data_dir=data_dir,
+        split='test',
+        artifact_dir=artifact_dir
+    )
+    # Get indices for known and unknown samples in test set
+    test_labels_array = test_dataset.y_multi
+    known_mask_test = np.isin(test_labels_array, withheld_class_indices, invert=True)
+    unknown_mask_test = np.isin(test_labels_array, withheld_class_indices)
+
+    known_indices_test = np.where(known_mask_test)[0]
+    unknown_indices_test = np.where(unknown_mask_test)[0]
+
+    print(f"Test set split:")
+    print(f"  - Known samples: {len(known_indices_test)}")
+    print(f"  - Unknown samples (withheld classes): {len(unknown_indices_test)}")
+
+    # Create subset data loaders
+    from torch.utils.data import Subset
+
+    known_test_subset = Subset(test_dataset, known_indices_test)
+    unknown_test_subset = Subset(test_dataset, unknown_indices_test)
+
+    known_test_loader = DataLoader(
+        known_test_subset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False
+    )
+
+    unknown_test_loader = DataLoader(
+        unknown_test_subset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False
+    )
+
+    # Run open-set evaluation on test set using threshold from validation
+    print(f"\nRunning open-set evaluation on test set...")
+    open_set_test_metrics = evaluate_open_set(
+        model=model,
+        known_loader=known_test_loader,
+        unknown_loader=unknown_test_loader,
+        device=device,
+        threshold=open_set_metrics['threshold']  # Use threshold from validation
+    )
+
+    print(f"Open-set Test Results:")
+    print(f"  - Known Accuracy: {open_set_test_metrics['known_accuracy']:.4f}")
+    print(f"  - Known Macro F1: {open_set_test_metrics['known_macro_f1']:.4f}")
+    print(f"  - Known Recall: {open_set_test_metrics['known_recall']:.4f}")
+    print(f"  - Unknown Precision: {open_set_test_metrics['unknown_precision']:.4f}")
+    print(f"  - Unknown Recall: {open_set_test_metrics['unknown_recall']:.4f}")
+    print(f"  - Unknown F1: {open_set_test_metrics['unknown_f1']:.4f}")
+    print(f"  - FAR (False Acceptance Rate): {open_set_test_metrics['far']:.4f}")
+    print(f"  - KRR (Known Rejection Rate): {open_set_test_metrics['krr']:.4f}")
+    print(f"  - AUROC: {open_set_test_metrics['auc_roc']:.4f}")
+    print(f"  - AUPR: {open_set_test_metrics['auc_pr']:.4f}")
+    print(f"  - Threshold: {open_set_test_metrics['threshold']:.4f}")
+
+    # Save open-set test results
+    open_set_test_path = os.path.join(results_save_dir, 'open_set_test_results.json')
+    with open(open_set_test_path, 'w') as f:
+        json.dump(open_set_test_metrics, f, indent=2)
+
     # Save prototype vectors and other artifacts
     prototype_path = os.path.join(model_save_dir, 'prototypes.npy')
     np.save(prototype_path, model.prototype_layer.prototypes.detach().cpu().numpy())
@@ -673,7 +759,8 @@ def main():
     final_metrics = {
         'closed_set_validation': val_metrics,
         'closed_set_test': test_metrics,
-        'open_set': open_set_metrics if 'open_set_metrics' in locals() else None
+        'open_set_validation': open_set_metrics if 'open_set_metrics' in locals() else None,
+        'open_set_test': open_set_test_metrics if 'open_set_test_metrics' in locals() else None
     }
 
     # Configuration for experiment log
@@ -694,7 +781,7 @@ def main():
     }
 
     # Notes for experiment log
-    notes = f"ProtoIDS v1 implementation. Closed-set evaluation on CICIoT2023 validation/test sets. Open-set evaluation withholding {withheld_classes if 'withheld_classes' in locals() else 'MITM-ArpSpoofing, VulnerabilityScan, DictionaryBruteForce'} as unknown classes."
+    notes = f"ProtoIDS v1 implementation. Closed-set evaluation on CICIoT2023 validation/test sets. Open-set evaluation on validation and test sets withholding {withheld_classes if 'withheld_classes' in locals() else 'MITM-ArpSpoofing, VulnerabilityScan, DictionaryBruteForce'} as unknown classes."
 
     # Save to experiment log
     save_experiment_log(
