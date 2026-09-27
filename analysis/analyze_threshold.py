@@ -19,7 +19,7 @@ from sklearn.metrics import f1_score, roc_auc_score, average_precision_score
 
 
 # Add src/ to Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from protoids.dataset import create_data_loaders
 from protoids.protoids_model import ProtoIDS
@@ -801,11 +801,15 @@ def main():
     # ARRAYS TO STORE THRESHOLD METRICS
     # ============================================================
 
-    precisions = []
-    recalls = []
-    f1s = []
-    fars = []
-    krrs = []
+    # ARRAYS TO STORE THRESHOLD METRICS
+    # ============================================================
+
+    unknown_precisions = []
+    unknown_recalls = []
+    unknown_f1s = []
+    unknown_fars = []
+    unknown_krrs = []
+    unknown_fdrs = []
     known_acceptance_rates = []
     known_macro_f1s = []
 
@@ -834,70 +838,55 @@ def main():
         # Confusion matrix components
         # --------------------------------------------------------
 
-        # TN: known predicted as known
-        TN = np.sum(
-            (y_true_binary == 0)
-            & (y_pred_binary == 0)
-        )
-
-        # FP: unknown predicted as known
-        #     -> False Acceptance
-        FP = np.sum(
-            (y_true_binary == 1)
-            & (y_pred_binary == 0)
-        )
-
-        # FN: known predicted as unknown
-        #     -> Known Rejection
-        FN = np.sum(
-            (y_true_binary == 0)
-            & (y_pred_binary == 1)
-        )
-
-        # TP: unknown predicted as unknown
-        TP = np.sum(
-            (y_true_binary == 1)
-            & (y_pred_binary == 1)
-        )
+        TP = np.sum((y_true_binary == 1) & (y_pred_binary == 1))   # unknown predicted as unknown
+        FN = np.sum((y_true_binary == 1) & (y_pred_binary == 0))   # unknown predicted as known
+        FP = np.sum((y_true_binary == 0) & (y_pred_binary == 1))   # known predicted as unknown
+        TN = np.sum((y_true_binary == 0) & (y_pred_binary == 0))   # known predicted as known
 
         # --------------------------------------------------------
         # Binary metrics
         # --------------------------------------------------------
 
-        precision = (
+        unknown_precision = (
             TP / (TP + FP)
             if (TP + FP) > 0
             else 0.0
         )
 
-        recall = (
+        unknown_recall = (
             TP / (TP + FN)
             if (TP + FN) > 0
             else 0.0
         )
 
-        f1 = (
-            2 * precision * recall
-            / (precision + recall)
-            if (precision + recall) > 0
+        unknown_f1 = (
+            2 * unknown_precision * unknown_recall
+            / (unknown_precision + unknown_recall)
+            if (unknown_precision + unknown_recall) > 0
             else 0.0
         )
 
-        far = (
-            FP / (FP + TP)
-            if (FP + TP) > 0
+        unknown_far = (
+            FN / (TP + FN)
+            if (TP + FN) > 0
             else 0.0
         )
 
-        krr = (
-            FN / (FN + TN)
-            if (FN + TN) > 0
+        unknown_krr = (
+            FP / (FP + TN)
+            if (FP + TN) > 0
+            else 0.0
+        )
+
+        unknown_fdr = (
+            FP / (TP + FP)
+            if (TP + FP) > 0
             else 0.0
         )
 
         known_acceptance = (
-            TN / (TN + FN)
-            if (TN + FN) > 0
+            TN / (FP + TN)
+            if (FP + TN) > 0
             else 0.0
         )
 
@@ -945,24 +934,28 @@ def main():
         # Store metrics
         # --------------------------------------------------------
 
-        precisions.append(
-            precision
+        unknown_precisions.append(
+            unknown_precision
         )
 
-        recalls.append(
-            recall
+        unknown_recalls.append(
+            unknown_recall
         )
 
-        f1s.append(
-            f1
+        unknown_f1s.append(
+            unknown_f1
         )
 
-        fars.append(
-            far
+        unknown_fars.append(
+            unknown_far
         )
 
-        krrs.append(
-            krr
+        unknown_krrs.append(
+            unknown_krr
+        )
+
+        unknown_fdrs.append(
+            unknown_fdr
         )
 
         known_acceptance_rates.append(
@@ -972,36 +965,34 @@ def main():
         known_macro_f1s.append(
             macro_f1
         )
-
-    # ============================================================
     # FIND BEST THRESHOLD
     # ============================================================
 
-    f1s = np.array(f1s)
+    unknown_f1s = np.array(unknown_f1s)
 
-    best_idx = np.argmax(f1s)
+    best_idx = np.argmax(unknown_f1s)
 
     best_T = thresholds[
         best_idx
     ]
 
-    best_f1 = f1s[
+    best_f1 = unknown_f1s[
         best_idx
     ]
 
-    best_precision = precisions[
+    best_precision = unknown_precisions[
         best_idx
     ]
 
-    best_recall = recalls[
+    best_recall = unknown_recalls[
         best_idx
     ]
 
-    best_far = fars[
+    best_far = unknown_fars[
         best_idx
     ]
 
-    best_krr = krrs[
+    best_krr = unknown_krrs[
         best_idx
     ]
 
@@ -1072,7 +1063,7 @@ def main():
     # TARGET FAR VALUES
     # ============================================================
 
-    fars = np.array(fars)
+    unknown_fars = np.array(unknown_fars)
 
     target_fars = [
         0.01,
@@ -1093,14 +1084,14 @@ def main():
         # Find threshold where FAR is closest
         # to target FAR
         far_errors = np.abs(
-            fars - target_far
+            unknown_fars - target_far
         )
 
         idx = np.argmin(
             far_errors
         )
 
-        achieved_far = fars[
+        achieved_far = unknown_fars[
             idx
         ]
 
@@ -1108,19 +1099,19 @@ def main():
             idx
         ]
 
-        precision = precisions[
+        precision = unknown_precisions[
             idx
         ]
 
-        recall = recalls[
+        recall = unknown_recalls[
             idx
         ]
 
-        f1 = f1s[
+        f1 = unknown_f1s[
             idx
         ]
 
-        krr = krrs[
+        krr = unknown_krrs[
             idx
         ]
 
@@ -1225,12 +1216,12 @@ def main():
 
         print(
             f"  Unknown F1: "
-            f"{f1s[idx]:.4f}"
+            f"{unknown_f1s[idx]:.4f}"
         )
 
         print(
             f"  FAR: "
-            f"{fars[idx]:.4f}"
+            f"{unknown_fars[idx]:.4f}"
         )
 
     print("=" * 60)
