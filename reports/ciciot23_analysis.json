@@ -1,0 +1,197 @@
+{
+  "column_names": [
+    "flow_duration",
+    "Header_Length",
+    "Protocol Type",
+    "Duration",
+    "Rate",
+    "Srate",
+    "Drate",
+    "fin_flag_number",
+    "syn_flag_number",
+    "rst_flag_number",
+    "psh_flag_number",
+    "ack_flag_number",
+    "ece_flag_number",
+    "cwr_flag_number",
+    "ack_count",
+    "syn_count",
+    "fin_count",
+    "urg_count",
+    "rst_count",
+    "HTTP",
+    "HTTPS",
+    "DNS",
+    "Telnet",
+    "SMTP",
+    "SSH",
+    "IRC",
+    "TCP",
+    "UDP",
+    "DHCP",
+    "ARP",
+    "ICMP",
+    "IPv",
+    "LLC",
+    "Tot sum",
+    "Min",
+    "Max",
+    "AVG",
+    "Std",
+    "Tot size",
+    "IAT",
+    "Number",
+    "Magnitue",
+    "Radius",
+    "Covariance",
+    "Variance",
+    "Weight",
+    "label"
+  ],
+  "columns_consistent": true,
+  "row_counts": {
+    "train": 5491971,
+    "validation": 1176851,
+    "test": 1176851
+  },
+  "label_candidates": [
+    "Protocol Type",
+    "label"
+  ],
+  "num_columns": 46,
+  "cat_columns": 1,
+  "num_col_names": [
+    "flow_duration",
+    "Header_Length",
+    "Protocol Type",
+    "Duration",
+    "Rate",
+    "Srate",
+    "Drate",
+    "fin_flag_number",
+    "syn_flag_number",
+    "rst_flag_number",
+    "psh_flag_number",
+    "ack_flag_number",
+    "ece_flag_number",
+    "cwr_flag_number",
+    "ack_count",
+    "syn_count",
+    "fin_count",
+    "urg_count",
+    "rst_count",
+    "HTTP",
+    "HTTPS",
+    "DNS",
+    "Telnet",
+    "SMTP",
+    "SSH",
+    "IRC",
+    "TCP",
+    "UDP",
+    "DHCP",
+    "ARP",
+    "ICMP",
+    "IPv",
+    "LLC",
+    "Tot sum",
+    "Min",
+    "Max",
+    "AVG",
+    "Std",
+    "Tot size",
+    "IAT",
+    "Number",
+    "Magnitue",
+    "Radius",
+    "Covariance",
+    "Variance",
+    "Weight"
+  ],
+  "cat_col_names": [
+    "label"
+  ],
+  "top_correlations": [
+    [
+      "Magnitue",
+      0.44974347297463535
+    ],
+    [
+      "Protocol Type",
+      0.40867253680562704
+    ],
+    [
+      "Tot size",
+      0.39185838803498246
+    ],
+    [
+      "AVG",
+      0.39144323483751425
+    ],
+    [
+      "Tot sum",
+      0.3787125168356304
+    ],
+    [
+      "ICMP",
+      0.3702298422562543
+    ],
+    [
+      "Min",
+      0.37010314502339287
+    ],
+    [
+      "Variance",
+      0.3480670010582713
+    ],
+    [
+      "Max",
+      0.26919946744676426
+    ],
+    [
+      "Std",
+      0.24468388699062116
+    ],
+    [
+      "Radius",
+      0.24457195928232298
+    ],
+    [
+      "ack_flag_number",
+      0.22072666248173445
+    ],
+    [
+      "UDP",
+      0.21242157634397216
+    ],
+    [
+      "psh_flag_number",
+      0.1815736642999239
+    ],
+    [
+      "syn_count",
+      0.17516331431754137
+    ],
+    [
+      "Header_Length",
+      0.12529311792466055
+    ],
+    [
+      "urg_count",
+      0.09952334738496386
+    ],
+    [
+      "fin_count",
+      0.07954015234373177
+    ],
+    [
+      "Duration",
+      0.0755779008306743
+    ],
+    [
+      "Covariance",
+      0.07309606234371445
+    ]
+  ],
+  "main_label": "label"
+}
