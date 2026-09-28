@@ -131,6 +131,7 @@ def parse_args():
 
 
 def main():
+    print("Starting threshold analysis...")
     args = parse_args()
 
     # ============================================================
@@ -271,6 +272,7 @@ def main():
     checkpoint = torch.load(
         model_path,
         map_location=device,
+        weights_only=False,
     )
 
     model = ProtoIDS(
