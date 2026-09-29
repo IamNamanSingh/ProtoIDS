@@ -922,43 +922,26 @@ def main():
         )
 
         # --------------------------------------------------------
-        # Known Macro F1
-        # Only true known samples accepted as known
+        # Known Metrics
         # --------------------------------------------------------
 
-        true_known_accepted_mask = (
-            (all_true_labels != unknown_class_index)
-            & (all_min_dists <= T)
-        )
+        known_mask_val = (all_true_labels != unknown_class_index)
+        known_true_val = all_true_labels[known_mask_val]
+        known_pred_val = all_pred_labels[known_mask_val].copy()
 
-        if np.sum(
-            true_known_accepted_mask
-        ) > 0:
+        # For a known sample, if min_distance > threshold, its final prediction becomes UNKNOWN
+        known_dists_val = all_min_dists[known_mask_val]
+        known_pred_val[known_dists_val > T] = unknown_class_index
 
-            true_labels_known = (
-                all_true_labels[
-                    true_known_accepted_mask
-                ]
+        try:
+            macro_f1 = f1_score(
+                known_true_val,
+                known_pred_val,
+                average="macro",
+                labels=np.unique(known_true_val),
+                zero_division=0,
             )
-
-            pred_labels_known = (
-                all_pred_labels[
-                    true_known_accepted_mask
-                ]
-            )
-
-            try:
-                macro_f1 = f1_score(
-                    true_labels_known,
-                    pred_labels_known,
-                    average="macro",
-                    zero_division=0,
-                )
-
-            except Exception:
-                macro_f1 = 0.0
-
-        else:
+        except Exception:
             macro_f1 = 0.0
 
         # --------------------------------------------------------
