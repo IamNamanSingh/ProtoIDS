@@ -564,6 +564,7 @@ def main():
         print(f"\nTraining completed in {training_time:.2f} seconds.")
 
         # Save the trained model
+        os.makedirs(model_save_dir, exist_ok=True)
         model_path = os.path.join(model_save_dir, 'model.pth')
         torch.save({
             'model_state_dict': model.state_dict(),
@@ -581,6 +582,7 @@ def main():
         print(f"Model saved to {model_path}")
 
         # Save training history
+        os.makedirs(results_save_dir, exist_ok=True)
         history_path = os.path.join(results_save_dir, 'training_history.json')
         with open(history_path, 'w') as f:
             json.dump(training_history, f, indent=2)

@@ -505,14 +505,16 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
     df_raw = pd.read_csv(csv_path, low_memory=False)
     original_dtypes = df_raw.dtypes.to_dict()
 
-    # Coerce to numeric
+    # Coerce to numeric (excluding label columns)
     df = df_raw.copy()
-    for col in df.columns:
+    label_cols = ['Attack_label', 'Attack_type']
+    cols_to_coerce = [col for col in df.columns if col not in label_cols]
+    for col in cols_to_coerce:
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # Identify columns that had non-numeric values (produced NaN after coercion)
     coerced_cols = []
-    for col in df.columns:
+    for col in cols_to_coerce:
         if df[col].isna().any():
             coerced_cols.append(col)
     if coerced_cols:
@@ -520,6 +522,7 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
 
     # Fill NaN with 0
     df = df.fillna(0)
+    # Note: label columns remain as original strings
 
     # Define columns to remove (leakage, labels, etc.) as per audit
     label_cols = ['Attack_label', 'Attack_type']
@@ -732,10 +735,11 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
         manifest_path = os.path.join(scaler_save_dir, f'{dataset_name}_feature_manifest.json')
         with open(manifest_path, 'w') as f:
             json.dump(manifest, f, indent=2)
-        # Create label mapping (known classes only)
+        # Create label mapping (known classes only) in the same format as CICIoT2023
+        label_mapping = {"multiclass": {"label_to_int": label_to_int}}
         label_mapping_path = os.path.join(scaler_save_dir, f'{dataset_name}_label_mapping.json')
         with open(label_mapping_path, 'w') as f:
-            json.dump(label_to_int, f, indent=2)
+            json.dump(label_mapping, f, indent=2)
         print(f"Saved scaler, feature manifest, and label mapping to {scaler_save_dir}")
 
     # We will create memmap arrays for each split and then use MemmapDataset.
