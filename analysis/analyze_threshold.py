@@ -15,7 +15,7 @@ import json
 import pandas as pd
 import torch
 import numpy as np
-from sklearn.metrics import f1_score, roc_auc_score, average_precision_score
+from sklearn.metrics import f1_score, roc_auc_score, average_precision_score, accuracy_score, recall_score
 
 
 # Add src/ to Python path
@@ -1295,7 +1295,6 @@ def main():
     all_true_labels_test = torch.cat(all_true_labels_test).numpy()
     all_pred_labels_test = torch.cat(all_pred_labels_test).numpy()
 
-    from sklearn.metrics import f1_score, accuracy_score, recall_score
 
     for T in eval_thresholds:
         print(f"\nEvaluating Test Set at Threshold: {T:.4f}")
