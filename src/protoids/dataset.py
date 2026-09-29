@@ -500,29 +500,9 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
 
     print(f"Loading Edge-IIoTset dataset from: {csv_path}")
 
-    # Load CSV, coerce all columns to numeric, fill NaN with 0
-    # We'll also capture original dtypes to warn about coercion
-    df_raw = pd.read_csv(csv_path, low_memory=False)
-    original_dtypes = df_raw.dtypes.to_dict()
-
-    # Coerce to numeric (excluding label columns)
-    df = df_raw.copy()
-    label_cols = ['Attack_label', 'Attack_type']
-    cols_to_coerce = [col for col in df.columns if col not in label_cols]
-    for col in cols_to_coerce:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # Identify columns that had non-numeric values (produced NaN after coercion)
-    coerced_cols = []
-    for col in cols_to_coerce:
-        if df[col].isna().any():
-            coerced_cols.append(col)
-    if coerced_cols:
-        warnings.warn(f"Columns required coercion from non-numeric to numeric (NaN replaced with 0): {coerced_cols}")
-
-    # Fill NaN with 0
-    df = df.fillna(0)
-    # Note: label columns remain as original strings
+    # First, read the header to get column names
+    header_df = pd.read_csv(csv_path, nrows=0)
+    all_columns = header_df.columns.tolist()
 
     # Define columns to remove (leakage, labels, etc.) as per audit
     label_cols = ['Attack_label', 'Attack_type']
@@ -545,215 +525,175 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
     ]
     cols_to_remove = label_cols + high_risk_cols + additional_cols
 
-    # Remove label columns and leakage columns from features
-    feature_cols = [col for col in df.columns if col not in cols_to_remove]
-    print(f"Number of features after removing leakage and label columns: {len(feature_cols)}")
+    # Determine initial feature columns (excluding leakage and label columns)
+    initial_feature_cols = [col for col in all_columns if col not in cols_to_remove]
+    print(f"Number of features after removing leakage and label columns: {len(initial_feature_cols)}")
 
-    # Prepare label mapping for Attack_type
-    # We'll get unique Attack_type values from the original raw data (as strings)
-    attack_type_series = df_raw['Attack_type']
-    unique_attack_types = sorted(attack_type_series.unique())
-    print(f"Unique Attack_type values: {unique_attack_types}")
+    # Pass 1: Get unique Attack_type strings
+    print("Pass 1: Collecting unique Attack_type values...")
+    attack_type_set = set()
+    chunksize = 100_000  # Adjust based on memory availability
+    for chunk in pd.read_csv(csv_path, usecols=['Attack_type'], chunksize=chunksize):
+        attack_type_set.update(chunk['Attack_type'].unique())
 
-    # Determine which classes are withheld
-    if open_set and withheld_classes is not None and len(withheld_classes) > 0:
-        # Use the provided withheld class names (strings)
+    print(f"Found {len(attack_type_set)} unique Attack_type values.")
+
+    # Determine withheld classes (if provided) and validate
+    if withheld_classes is not None and len(withheld_classes) > 0:
         withheld_set = set(withheld_classes)
         # Validate that all withheld classes exist in the dataset
-        unknown_in_data = withheld_set - set(unique_attack_types)
+        unknown_in_data = withheld_set - attack_type_set
         if unknown_in_data:
             raise ValueError(f"The following withheld classes are not present in the dataset: {unknown_in_data}")
-        known_set = set(unique_attack_types) - withheld_set
     else:
-        # Default behavior: if open_set is True but no custom classes supplied, we fall back to CICIoT23 hardcoded list?
-        # But for Edge-IIoT we should not hardcode CICIoT23 classes. We'll treat as no withholding (closed set) unless custom classes given.
-        # We'll keep open_set=False effectively.
         withheld_set = set()
-        known_set = set(unique_attack_types)
         open_set = False  # override to closed set if no withheld classes given
 
-    # Map Attack_type to integer labels: known classes 0..len(known_set)-1, withheld to len(known_set)
+    known_set = attack_type_set - withheld_set
+    print(f"Known classes: {len(known_set)}, Withheld classes: {len(withheld_set)}")
+
+    # Create mapping from Attack_type string to integer ID (unique per string)
+    sorted_attack_types = sorted(list(attack_type_set))
+    string_to_id = {string: idx for idx, string in enumerate(sorted_attack_types)}
+    id_to_string = {idx: string for string, idx in string_to_id.items()}
+
+    # Create label mapping: known classes -> 0..N-1, withheld -> unknown_class_index
     known_list = sorted(list(known_set))
     label_to_int = {cls: idx for idx, cls in enumerate(known_list)}
     unknown_class_index = len(known_list)  # if open_set else -1
     if not open_set:
         unknown_class_index = None  # not used
 
-    # Function to map a raw Attack_type string to integer label
-    def map_attack_type(val):
-        if val in label_to_int:
-            return label_to_int[val]
-        else:
-            # Withheld class
-            return unknown_class_index
+    # Pass 2: Read CSV to get attack_type_id for each row and store in array
+    print("Pass 2: Reading Attack_type IDs for each row...")
+    num_rows = 0
+    attack_type_ids = []  # we'll store as list of ints, then convert to numpy array
+    for chunk in pd.read_csv(csv_path, usecols=['Attack_type'], chunksize=chunksize):
+        # Map each Attack_type string to its integer ID
+        ids = chunk['Attack_type'].map(string_to_id).values
+        attack_type_ids.extend(ids)
+        num_rows += len(chunk)
 
-    # Apply mapping to create integer label column
-    df['label_int'] = df['Attack_type'].apply(map_attack_type)
+    attack_type_ids = np.array(attack_type_ids, dtype=np.int32)
+    print(f"Total rows: {num_rows}")
 
-    # Now we need to split the data into train, val, test stratified by Attack_type (original string)
-    # We'll do two splits: first split off test (15%), then split the remaining into train (70%) and val (15%).
-    # Alternatively, we can split off val (15%) first, then split remaining into train (70%) and test (15%).
-    # We'll use StratifiedShuffleSplit with n_splits=1, test_size=0.15, random_state=42 to get train+val vs test.
-    # Then on the train+val portion, we split again with test_size=0.15/0.85 (so that val is 0.15 of original).
+    # Now compute the label_int array (0..N-1 for known, unknown_class_index for withheld)
+    label_int_array = np.full(num_rows, fill_value=unknown_class_index, dtype=np.int64)
+    for string, label in label_to_int.items():
+        sid = string_to_id[string]
+        mask = (attack_type_ids == sid)
+        label_int_array[mask] = label
+    # Note: withheld classes remain as unknown_class_index (already set)
 
-    X = df[feature_cols].values  # features
-    y_str = df['Attack_type'].values  # stratify by original string labels
+    # Now perform stratified split using attack_type_ids as the stratification variable (since it's unique per string)
+    # We need a dummy X array for StratifiedShuffleSplit; we can use a column of zeros.
+    X_dummy = np.zeros((num_rows, 1), dtype=np.float32)
+    y_strat = attack_type_ids  # stratify by the integer ID (which maps 1:1 to Attack_type string)
 
-    # First split: train+val (70%) vs test (30%)
+    # First split: train+val (70%) vs test (15%)
     sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.15, random_state=42)
-    for train_val_idx, test_idx in sss1.split(X, y_str):
+    for train_val_idx, test_idx in sss1.split(X_dummy, y_strat):
         pass
-
-    X_train_val = X[train_val_idx]
-    y_train_val_str = y_str[train_val_idx]
-    X_test = X[test_idx]
-    y_test_str = y_str[test_idx]
 
     # Second split: split train+val into train (70% of original) and val (15% of original)
-    # Relative sizes: we want train to be 0.70 of original, val 0.15 of original.
-    # Given train_val is 0.70 of original, we need to take from train_val:
-    # train fraction = 0.70 / 0.70 = 1.0? Wait we need to split train_val into train and val such that:
-    # train size = 0.70 original, val size = 0.15 original.
-    # Since train_val size = 0.70 original, we need to take train = (0.70/0.70) = 100% of train_val? That would leave 0 for val.
-    # Actually we need to compute: from train_val (size 0.70), we want to leave out val of size 0.15 original, which is 0.15/0.70 = 0.2142857 of train_val.
-    # So we split train_val with test_size = 0.2142857 (so that test becomes val) and train remains the rest.
+    X_train_val = X_dummy[train_val_idx]
+    y_train_val_strat = y_strat[train_val_idx]
     sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.15/0.85, random_state=42)
-    for train_idx, val_idx in sss2.split(X_train_val, y_train_val_str):
+    for train_idx, val_idx in sss2.split(X_train_val, y_train_val_strat):
         pass
 
-    X_train = X_train_val[train_idx]
-    y_train_str = y_train_val_str[train_idx]
-    X_val = X_train_val[val_idx]
-    y_val_str = y_train_val_str[val_idx]
-
-    # Now we have indices relative to the original dataframe:
-    # train_idx (within train_val), val_idx (within train_val), test_idx (original)
-    # Let's compute actual indices in original df:
+    # Compute actual indices in original dataframe
     train_indices = train_val_idx[train_idx]
     val_indices = train_val_idx[val_idx]
     test_indices = test_idx
 
-    # For open set, we need to ensure that withheld classes are excluded from training (but kept in val/test and mapped to unknown)
-    # We already have label_int where withheld classes are mapped to unknown_class_index.
-    # However we must also ensure that the scaler is fitted only on known training samples (i.e., those with label_int != unknown_class_index)
-    # So we will compute known-only mask for training.
+    print(f"Train+val+test sizes: {len(train_indices)} {len(val_indices)} {len(test_indices)}")
 
-    # Determine constant columns from training data only (after removing leakage columns, but before scaling)
-    # We'll use the training subset (original indices) and the feature columns.
-    # We'll consider only known training samples (label_int != unknown_class_index) if open_set, else all training samples.
-    if open_set:
-        known_train_mask = df.iloc[train_indices]['label_int'] != unknown_class_index
-        known_train_indices = train_indices[known_train_mask.values]
-    else:
-        known_train_indices = train_indices  # all training samples are known
+    # Determine known training samples (exclude withheld classes from training)
+    known_train_mask = label_int_array[train_indices] != unknown_class_index
+    known_train_indices = train_indices[known_train_mask]
+    known_train_count = len(known_train_indices)
+    total_train_count = len(train_indices)
+    print(f"Total raw training partition (before withholding exclusion): {total_train_count}")
+    print(f"Known training samples used for scaler.fit: {known_train_count}")
+    print(f"Withheld training samples excluded from scaler.fit: {total_train_count - known_train_count}")
 
-    # Compute constant columns on known training data
-    # We'll look at the feature columns subset
-    train_known_features = df.iloc[known_train_indices][feature_cols]
-    constant_cols = []
-    for col in feature_cols:
-        # Check if column has only one unique value (excluding NaN? but we have no NaN)
-        if train_known_features[col].nunique() == 1:
-            constant_cols.append(col)
+    # Precompute arrays for fast lookup in later passes
+    is_known_train = np.zeros(num_rows, dtype=bool)
+    is_known_train[known_train_indices] = True
+    split_of_row = np.full(num_rows, fill_value=-1, dtype=np.int8)  # 0=train,1=val,2=test
+    split_of_row[train_indices] = 0
+    split_of_row[val_indices] = 1
+    split_of_row[test_indices] = 2
+
+    # Pass 3: Compute scaler statistics and constant column detection using only known training samples
+    print("Pass 3: Computing statistics for scaling and constant column detection...")
+    # Initialize online statistics for each initial feature column
+    n_features = len(initial_feature_cols)
+    col_sums = np.zeros(n_features, dtype=np.float64)
+    col_sums_sq = np.zeros(n_features, dtype=np.float64)
+    col_mins = np.full(n_features, fill_value=np.inf, dtype=np.float64)
+    col_maxs = np.full(n_features, fill_value=-np.inf, dtype=np.float64)
+    col_counts = np.zeros(n_features, dtype=np.int64)
+
+    # We'll read the CSV in chunks, but only the initial feature columns
+    # We need to know the column indices for initial_feature_cols in the CSV
+    # We can use usecols=initial_feature_cols
+    chunk_count = 0
+    for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+        chunk = chunk.apply(pd.to_numeric, errors='coerce').fillna(0)
+        chunk_count += 1
+        if chunk_count % 10 == 0:
+            print(f"  Processed {chunk_count} chunks...")
+        # For each row in the chunk, we need to know its global row index
+        # We can keep a running offset
+        start_idx = (chunk_count - 1) * chunksize
+        end_idx = start_idx + len(chunk)
+        # Get the mask of known training samples in this chunk
+        mask = is_known_train[start_idx:end_idx]
+        if not np.any(mask):
+            continue
+        # Extract the features for known training samples in this chunk and convert to numeric
+        features = chunk.iloc[mask].apply(pd.to_numeric, errors='coerce').fillna(0).values  # shape (n_samples, n_features)
+        # Update online statistics
+        col_sums += np.sum(features, axis=0)
+        col_sums_sq += np.sum(features ** 2, axis=0)
+        col_mins = np.minimum(col_mins, np.min(features, axis=0))
+        col_maxs = np.maximum(col_maxs, np.max(features, axis=0))
+        col_counts += np.sum(mask)
+
+    # Compute mean and std
+    means = col_sums / col_counts
+    # Population variance: (sum_sq - sum*sum/count) / count
+    variances = (col_sums_sq - col_sums * col_sums / col_counts) / col_counts
+    # Avoid negative variance due to floating point
+    variances = np.maximum(variances, 0.0)
+    stds = np.sqrt(variances)
+
+    # Detect constant columns: where min == max (or std == 0)
+    constant_mask = (col_mins == col_maxs)  # or stds == 0
+    constant_cols = [initial_feature_cols[i] for i in range(n_features) if constant_mask[i]]
     if constant_cols:
         print(f"Constant columns found in training data (will be removed): {constant_cols}")
-        # Remove constant columns from feature columns
-        feature_cols = [col for col in feature_cols if col not in constant_cols]
-        # Update X arrays accordingly
-        # We'll need to re-slice the data with the new feature columns
-        X = df[feature_cols].values
-        # Resplit indices? Instead we can recompute X_train, X_val, X_test using the new feature columns.
-        # Let's do that:
-        X_train = df.iloc[train_indices][feature_cols].values
-        X_val = df.iloc[val_indices][feature_cols].values
-        X_test = df.iloc[test_indices][feature_cols].values
-        y_train_str = df.iloc[train_indices]['Attack_type'].values
-        y_val_str = df.iloc[val_indices]['Attack_type'].values
-        y_test_str = df.iloc[test_indices]['Attack_type'].values
-        # Also update label_int series? We'll recompute later.
+    # Final feature columns: exclude constant columns
+    final_feature_cols = [initial_feature_cols[i] for i in range(n_features) if not constant_mask[i]]
+    input_dim = len(final_feature_cols)
+    print(f"Number of features after removing constant columns: {input_dim}")
 
-    # After removing constant columns, we need to recompute the label_int mapping? No, label mapping unchanged.
-    # Now we have final feature columns.
+    # Pass 4: Write memmap files
+    print("Pass 4: Creating memmap arrays...")
+    # Determine sizes for each split
+    train_count = known_train_count
+    val_count = len(val_indices)
+    test_count = len(test_indices)
 
-    # Compute total raw training partition size
-    total_raw_training = len(train_indices)
-    known_training_for_scaler = len(known_train_indices)
-    withheld_excluded = total_raw_training - known_training_for_scaler
-    print(f"Total raw training partition (before withholding exclusion): {total_raw_training}")
-    print(f"Known training samples used for scaler.fit: {known_training_for_scaler}")
-    print(f"Withheld training samples excluded from scaler.fit: {withheld_excluded}")
-
-    # Features matrix for all samples (after constant column removal)
-    X_all = X  # X already holds df[feature_cols].values with final feature_cols
-
-    # Split data: training uses only known samples; validation and test include all samples
-    X_train = X_all[known_train_indices]
-    y_train = df.iloc[known_train_indices]['label_int'].values.astype(np.int64)
-
-    X_val = X_all[val_indices]
-    y_val = df.iloc[val_indices]['label_int'].values.astype(np.int64)
-
-    X_test = X_all[test_indices]
-    y_test = df.iloc[test_indices]['label_int'].values.astype(np.int64)
-
-    # Fit StandardScaler on known training samples only
-    scaler = StandardScaler()
-    scaler.fit(X_train)
-
-    # Transform features
-    X_train_scaled = scaler.transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
-    X_test_scaled = scaler.transform(X_test)
-
-    # Note: y_train, y_val, y_test already contain label_int values (with UNKNOWN index for withheld classes in val/test)
-
-    # Determine number of classes
-    if open_set:
-        num_classes = len(known_list) + 1  # known + unknown
-    else:
-        num_classes = len(known_list)  # all classes known
-
-    input_dim = len(feature_cols)
-
-    # Save artifacts to experiment directories
-    if scaler_save_dir is not None:
-        print(f"Saving scaler and label mappings to {scaler_save_dir}")
-        os.makedirs(scaler_save_dir, exist_ok=True)
-        joblib.dump(scaler, os.path.join(scaler_save_dir, f'{dataset_name}_preprocessor.joblib'))
-        # Create feature manifest
-        manifest = {
-            'original_columns': df_raw.columns.tolist(),
-            'removed_columns': cols_to_remove + constant_cols,
-            'retained_columns': feature_cols,
-            'removal_reasons': {
-                **{col: 'Label column' for col in label_cols},
-                **{col: 'High leakage risk (IP, timestamp, port, payload)' for col in high_risk_cols},
-                **{col: 'Recommended for removal in forensic report (environment-specific or leakage)' for col in additional_cols},
-                **{col: 'Constant column (only one unique value)' for col in constant_cols}
-            }
-        }
-        manifest_path = os.path.join(scaler_save_dir, f'{dataset_name}_feature_manifest.json')
-        with open(manifest_path, 'w') as f:
-            json.dump(manifest, f, indent=2)
-        # Create label mapping (known classes only) in the same format as CICIoT2023
-        label_mapping = {"multiclass": {"label_to_int": label_to_int}}
-        label_mapping_path = os.path.join(scaler_save_dir, f'{dataset_name}_label_mapping.json')
-        with open(label_mapping_path, 'w') as f:
-            json.dump(label_mapping, f, indent=2)
-        print(f"Saved scaler, feature manifest, and label mapping to {scaler_save_dir}")
-
-    # We will create memmap arrays for each split and then use MemmapDataset.
-    # However we already have the scaled arrays in memory; we could directly create TensorDataset but to keep
-    # consistency with the existing code path (which expects memmap files), we will write memmap files.
-    # We'll create a processed base directory similar to CICIoT2023.
+    processed_base_dir = os.path.join('experiments', 'processed', 'edgeiiot_open_set_k3_lambda01')
     if scaler_save_dir is not None:
         processed_base_dir = scaler_save_dir.replace('results', 'processed')
-    else:
-        processed_base_dir = os.path.join('experiments', 'processed', 'tmp')
     os.makedirs(processed_base_dir, exist_ok=True)
     print(f"Processed data will be saved to: {processed_base_dir}")
 
-    # Training memmap
+    # Training memmap (only known training samples)
     processed_train_dir = os.path.join(processed_base_dir, 'train')
     os.makedirs(processed_train_dir, exist_ok=True)
     train_features_path = os.path.join(processed_train_dir, 'features.dat')
@@ -773,12 +713,8 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
         with open(train_labels_path, 'r+b') as f:
             f.truncate(0)
 
-    train_features = np.memmap(train_features_path, dtype='float32', mode='w+', shape=(len(X_train_scaled), input_dim))
-    train_labels = np.memmap(train_labels_path, dtype='int64', mode='w+', shape=(len(y_train),))
-    train_features[:] = X_train_scaled
-    train_labels[:] = y_train
-    train_features.flush()
-    train_labels.flush()
+    train_features = np.memmap(train_features_path, dtype='float32', mode='w+', shape=(train_count, input_dim))
+    train_labels = np.memmap(train_labels_path, dtype='int64', mode='w+', shape=(train_count,))
 
     # Validation memmap
     processed_val_dir = os.path.join(processed_base_dir, 'validation')
@@ -799,12 +735,8 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
         with open(val_labels_path, 'r+b') as f:
             f.truncate(0)
 
-    val_features = np.memmap(val_features_path, dtype='float32', mode='w+', shape=(len(X_val_scaled), input_dim))
-    val_labels = np.memmap(val_labels_path, dtype='int64', mode='w+', shape=(len(y_val),))
-    val_features[:] = X_val_scaled
-    val_labels[:] = y_val
-    val_features.flush()
-    val_labels.flush()
+    val_features = np.memmap(val_features_path, dtype='float32', mode='w+', shape=(val_count, input_dim))
+    val_labels = np.memmap(val_labels_path, dtype='int64', mode='w+', shape=(val_count,))
 
     # Test memmap
     processed_test_dir = os.path.join(processed_base_dir, 'test')
@@ -825,21 +757,99 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
         with open(test_labels_path, 'r+b') as f:
             f.truncate(0)
 
-    test_features = np.memmap(test_features_path, dtype='float32', mode='w+', shape=(len(X_test_scaled), input_dim))
-    test_labels = np.memmap(test_labels_path, dtype='int64', mode='w+', shape=(len(y_test),))
-    test_features[:] = X_test_scaled
-    test_labels[:] = y_test
+    test_features = np.memmap(test_features_path, dtype='float32', mode='w+', shape=(test_count, input_dim))
+    test_labels = np.memmap(test_labels_path, dtype='int64', mode='w+', shape=(test_count,))
+
+    # We'll write row by row, keeping write pointers for each split
+    train_write_idx = 0
+    val_write_idx = 0
+    test_write_idx = 0
+
+    print("  Writing memmap arrays (this may take a while)...")
+    # Read the CSV again, but we need both the initial feature columns and the Attack_type column for labeling
+    # We'll read the initial feature columns and the Attack_type column together.
+    usecols_pass4 = initial_feature_cols + ['Attack_type']
+    chunk_count = 0
+    for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+        chunk[initial_feature_cols] = chunk[initial_feature_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+        chunk_count += 1
+        if chunk_count % 10 == 0:
+            print(f"  Processed {chunk_count} chunks for writing...")
+        start_idx = (chunk_count - 1) * chunksize
+        end_idx = start_idx + len(chunk)
+
+        # Get the split assignment for this chunk
+        splits_chunk = split_of_row[start_idx:end_idx]
+        # Get the label_int for this chunk (from our precomputed array)
+        labels_chunk = label_int_array[start_idx:end_idx]
+        # Get the initial feature values for this chunk and convert to numeric
+        features_chunk = chunk[initial_feature_cols].apply(pd.to_numeric, errors='coerce').fillna(0).values  # shape (n_chunk, n_initial_features)
+        # The Attack_type column is left as string for mapping
+        attack_type_chunk = chunk['Attack_type'].values  # shape (n_chunk,)
+
+        # Remove constant columns from features_chunk
+        if len(constant_cols) > 0:
+            # Create a mask for columns to keep
+            keep_mask = np.array([col not in constant_cols for col in initial_feature_cols])
+            features_chunk = features_chunk[:, keep_mask]
+        # Now features_chunk has shape (n_chunk, input_dim)
+
+        # Apply scaling: (x - mean) / std
+        # We need to use the means and stds for the final feature columns (in the same order)
+        # Since we removed constant columns, we need to select the corresponding means and stds
+        # We have means and stds for all initial_feature_cols; we'll use the same keep_mask
+        means_final = means[keep_mask] if len(constant_cols) > 0 else means
+        stds_final = stds[keep_mask] if len(constant_cols) > 0 else stds
+        # Avoid division by zero
+        stds_final = np.where(stds_final == 0, 1.0, stds_final)
+        features_scaled = (features_chunk - means_final) / stds_final
+
+        # Write to memmap files based on split
+        for i in range(len(chunk)):
+            split = splits_chunk[i]
+            label = labels_chunk[i]
+            feat_row = features_scaled[i]
+            if split == 0:  # train
+                if label == unknown_class_index:
+                    # skip withheld training samples
+                    pass
+                else:
+                    train_features[train_write_idx] = feat_row
+                    train_labels[train_write_idx] = label
+                    train_write_idx += 1
+            elif split == 1:  # val
+                val_features[val_write_idx] = feat_row
+                val_labels[val_write_idx] = label
+                val_write_idx += 1
+            elif split == 2:  # test
+                test_features[test_write_idx] = feat_row
+                test_labels[test_write_idx] = label
+                test_write_idx += 1
+            # else: should not happen
+
+    # Flush to ensure data is written
+    train_features.flush()
+    train_labels.flush()
+    val_features.flush()
+    val_labels.flush()
     test_features.flush()
     test_labels.flush()
 
+    print(f"  Training samples written: {train_write_idx}")
+    print(f"  Validation samples written: {val_write_idx}")
+    print(f"  Test samples written: {test_write_idx}")
+    scaler = StandardScaler()
+    scaler.mean_ = means_final
+    scaler.scale_ = stds_final
+
     # Create datasets
-    train_dataset = MemmapDataset(train_features_path, train_labels_path, len(y_train), input_dim,
+    train_dataset = MemmapDataset(train_features_path, train_labels_path, train_write_idx, input_dim,
                                   unknown_class_index=unknown_class_index if open_set else None,
                                   label_mapping=label_to_int if scaler_save_dir is not None else None)
-    val_dataset = MemmapDataset(val_features_path, val_labels_path, len(y_val), input_dim,
+    val_dataset = MemmapDataset(val_features_path, val_labels_path, val_write_idx, input_dim,
                                 unknown_class_index=unknown_class_index if open_set else None,
                                 label_mapping=label_to_int if scaler_save_dir is not None else None)
-    test_dataset = MemmapDataset(test_features_path, test_labels_path, len(y_test), input_dim,
+    test_dataset = MemmapDataset(test_features_path, test_labels_path, test_write_idx, input_dim,
                                  unknown_class_index=unknown_class_index if open_set else None,
                                  label_mapping=label_to_int if scaler_save_dir is not None else None)
 
@@ -849,33 +859,60 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
-        pin_memory=False
+        pin_memory=False,
     )
-
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
-        pin_memory=False
+        pin_memory=False,
     )
-
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
-        pin_memory=False
+        pin_memory=False,
     )
 
-    print(f"Data loaders created:")
-    print(f"  - Train batches: {len(train_loader)}")
-    print(f"  - Val batches: {len(val_loader)}")
-    print(f"  - Test batches: {len(test_loader)}")
+    # Determine number of classes
+    if open_set:
+        num_classes = len(known_list) + 1  # known + unknown
+    else:
+        num_classes = len(known_list)  # all classes known
+
+    print(f"Number of classes: {num_classes}")
+    print(f"Input dimension: {input_dim}")
+
+    # Save artifacts to experiment directories
+    if scaler_save_dir is not None:
+        print(f"Saving scaler and label mappings to {scaler_save_dir}")
+        os.makedirs(scaler_save_dir, exist_ok=True)
+        joblib.dump(scaler, os.path.join(scaler_save_dir, f'{dataset_name}_preprocessor.joblib'))
+        # Create feature manifest
+        manifest = {
+            'original_columns': all_columns,
+            'removed_columns': cols_to_remove + constant_cols,
+            'retained_columns': final_feature_cols,
+            'removal_reasons': {
+                **{col: 'Label column' for col in label_cols},
+                **{col: 'High leakage risk (IP, timestamp, port, payload)' for col in high_risk_cols},
+                **{col: 'Recommended for removal in forensic report (environment-specific or leakage)' for col in additional_cols},
+                **{col: 'Constant column (only one unique value)' for col in constant_cols}
+            }
+        }
+        manifest_path = os.path.join(scaler_save_dir, f'{dataset_name}_feature_manifest.json')
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
+        # Create label mapping (known classes only) in the same format as CICIoT2023
+        label_mapping = {"multiclass": {"label_to_int": label_to_int}}
+        label_mapping_path = os.path.join(scaler_save_dir, f'{dataset_name}_label_mapping.json')
+        with open(label_mapping_path, 'w') as f:
+            json.dump(label_mapping, f, indent=2)
+        print(f"Saved scaler, feature manifest, and label mapping to {scaler_save_dir}")
 
     return train_loader, val_loader, test_loader, num_classes, input_dim
-
-
 def create_data_loaders(data_dir: str, batch_size: int = 256,
                         artifact_dir: str = 'results/baselines',
                         development_subset_path: Optional[str] = None,
