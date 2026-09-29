@@ -933,19 +933,13 @@ def main():
         known_dists_val = all_min_dists[known_mask_val]
         known_pred_val[known_dists_val > T] = unknown_class_index
 
-        try:
-            macro_f1 = f1_score(
-                known_true_val,
-                known_pred_val,
-                average="macro",
-                labels=np.unique(known_true_val),
-                zero_division=0,
-            )
-        except Exception:
-            macro_f1 = 0.0
-
-        # --------------------------------------------------------
-        # Store metrics
+        macro_f1 = f1_score(
+            known_true_val,
+            known_pred_val,
+            average="macro",
+            labels=range(unknown_class_index),
+            zero_division=0,
+        )
         # --------------------------------------------------------
 
         unknown_precisions.append(
