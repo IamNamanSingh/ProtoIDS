@@ -440,7 +440,6 @@ def main():
         if not csv_path or not os.path.isfile(csv_path):
             csv_path = os.path.join(data_dir, 'DNN-EdgeIIoT-dataset.csv')
 
-        import numpy as np
         df = pd.read_csv(csv_path, usecols=["Attack_type"], low_memory=False)
         from sklearn.model_selection import StratifiedShuffleSplit
         labels = df["Attack_type"].values
