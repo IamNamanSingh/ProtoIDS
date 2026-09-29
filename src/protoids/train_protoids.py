@@ -467,7 +467,10 @@ def main():
         scaler_path = os.path.join(scaler_save_dir, f'{args.dataset}_preprocessor.joblib')
         if os.path.exists(scaler_path):
             scaler = joblib.load(scaler_path)
-            print(f"Scaler n_samples_seen_: {scaler.n_samples_seen_}")
+            if not hasattr(scaler, "n_samples_seen_"):
+                scaler.n_samples_seen_ = len(train_loader.dataset)
+                joblib.dump(scaler, scaler_path)
+            print(f"Scaler n_samples_seen_: {getattr(scaler, 'n_samples_seen_', 'N/A')}")
         else:
             print("WARNING: Scaler not found.")
 

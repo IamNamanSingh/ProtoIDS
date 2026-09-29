@@ -841,6 +841,9 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
     scaler = StandardScaler()
     scaler.mean_ = means_final
     scaler.scale_ = stds_final
+    scaler.var_ = stds_final ** 2
+    scaler.n_features_in_ = input_dim
+    scaler.n_samples_seen_ = known_train_count
 
     # Create datasets
     train_dataset = MemmapDataset(train_features_path, train_labels_path, train_write_idx, input_dim,
