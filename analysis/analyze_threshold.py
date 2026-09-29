@@ -184,16 +184,15 @@ def main():
     if args.withhold_open_set:
         import json as _json
 
-        label_mapping_path = os.path.join(
-            artifact_dir,
-            "ciciot_label_mapping.json",
-        )
-
-        with open(label_mapping_path) as f:
-            label_mapping = _json.load(f)
-
         if args.dataset == 'ciciot2023':
+            label_mapping_path = os.path.join(
+                artifact_dir,
+                "ciciot_label_mapping.json",
+            )
+            with open(label_mapping_path) as f:
+                label_mapping = _json.load(f)
             label_to_int = label_mapping["multiclass"]["label_to_int"]
+
             withheld_names = [
                 "MITM-ArpSpoofing",
                 "VulnerabilityScan",
@@ -205,6 +204,19 @@ def main():
                 if name in label_to_int
             ]
         else:
+            # Edge-IIoTset
+            label_mapping_path = os.path.join(
+                "experiments", "results", args.experiment_name, "edgeiiot_label_mapping.json"
+            )
+            if not os.path.exists(label_mapping_path):
+                label_mapping_path = os.path.join(
+                    "experiments", "results", args.experiment_name, "ciciot_label_mapping.json"
+                )
+
+            with open(label_mapping_path) as f:
+                label_mapping = _json.load(f)
+            label_to_int = label_mapping["multiclass"]["label_to_int"]
+
             withheld_names = [
                 "MITM",
                 "Password",
