@@ -460,6 +460,7 @@ def main():
         sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.15/0.85, random_state=42)
         train_idx, val_idx = next(sss2.split(np.zeros(len(train_val_idx)), labels[train_val_idx]))
         val_idx = train_val_idx[val_idx]
+        val_idx = np.sort(val_idx)
         original_val_labels = labels[val_idx].tolist()
 
     original_val_labels = np.array(
@@ -1255,6 +1256,119 @@ def main():
         )
 
     print("=" * 60)
+
+    # ============================================================
+    # PER-WITHHELD-CLASS OPERATING METRICS AT FIXED THRESHOLDS
+    # ============================================================
+    print("\n" + "=" * 60)
+    print("PER-WITHHELD-CLASS OPERATING METRICS AT FIXED THRESHOLDS")
+    print("=" * 60)
+
+    eval_thresholds = [0.0571, 0.0970]
+    for T in eval_thresholds:
+        print(f"\nThreshold: {T:.4f}")
+        for class_name in withheld_names:
+            class_mask = (original_val_labels == class_name)
+            class_dists = all_min_dists[class_mask]
+
+            if len(class_dists) == 0:
+                print(f"{class_name}: no samples found")
+                continue
+
+            tp = np.sum(class_dists > T)  # predicted as unknown
+            fn = np.sum(class_dists <= T) # predicted as known
+
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            far = fn / (tp + fn) if (tp + fn) > 0 else 0.0
+
+            median = np.median(class_dists)
+            p90 = np.percentile(class_dists, 90)
+
+            print(f"  {class_name:<30}")
+            print(f"    UNKNOWN Recall: {recall:.4f}")
+            print(f"    FAR:            {far:.4f}")
+            print(f"    Median dist:    {median:.6f}")
+            print(f"    P90 dist:       {p90:.6f}")
+
+    # ============================================================
+    # TEST EVALUATION AT FIXED THRESHOLDS
+    # ============================================================
+    print("\n" + "=" * 60)
+    print("TEST EVALUATION AT FIXED THRESHOLDS")
+    print("=" * 60)
+
+    print("Collecting test data...")
+    all_min_dists_test = []
+    all_true_labels_test = []
+    all_pred_labels_test = []
+
+    with torch.no_grad():
+        for batch_X, batch_y in test_loader:
+            batch_X = batch_X.to(device)
+            batch_y = batch_y.to(device)
+
+            _, normalized_embedding, _, _ = model(batch_X)
+            predicted_classes, min_distances = model.predict_class(normalized_embedding)
+
+            all_min_dists_test.append(min_distances.cpu())
+            all_true_labels_test.append(batch_y.cpu())
+            all_pred_labels_test.append(predicted_classes.cpu())
+
+    all_min_dists_test = torch.cat(all_min_dists_test).numpy()
+    all_true_labels_test = torch.cat(all_true_labels_test).numpy()
+    all_pred_labels_test = torch.cat(all_pred_labels_test).numpy()
+
+    from sklearn.metrics import f1_score, accuracy_score, recall_score
+
+    for T in eval_thresholds:
+        print(f"\nEvaluating Test Set at Threshold: {T:.4f}")
+
+        y_pred_binary = (all_min_dists_test > T).astype(int)
+        y_true_binary = (all_true_labels_test == unknown_class_index).astype(int)
+
+        TP = np.sum((y_true_binary == 1) & (y_pred_binary == 1))
+        FN = np.sum((y_true_binary == 1) & (y_pred_binary == 0))
+        FP = np.sum((y_true_binary == 0) & (y_pred_binary == 1))
+        TN = np.sum((y_true_binary == 0) & (y_pred_binary == 0))
+
+        unknown_prec = TP / (TP + FP) if (TP + FP) > 0 else 0.0
+        unknown_rec = TP / (TP + FN) if (TP + FN) > 0 else 0.0
+        unknown_f1 = 2 * unknown_prec * unknown_rec / (unknown_prec + unknown_rec) if (unknown_prec + unknown_rec) > 0 else 0.0
+
+        far = FN / (TP + FN) if (TP + FN) > 0 else 0.0
+        fdr = FP / (TP + FP) if (TP + FP) > 0 else 0.0
+        krr = FP / (FP + TN) if (FP + TN) > 0 else 0.0
+
+        try:
+            auc_roc = roc_auc_score(y_true_binary, all_min_dists_test)
+            auc_pr = average_precision_score(y_true_binary, all_min_dists_test)
+        except:
+            auc_roc = 0.0
+            auc_pr = 0.0
+
+        known_mask = (all_true_labels_test != unknown_class_index)
+        known_true = all_true_labels_test[known_mask]
+        known_pred = all_pred_labels_test[known_mask]
+
+        known_pred_final = known_pred.copy()
+        known_dists_test = all_min_dists_test[known_mask]
+        known_pred_final[known_dists_test > T] = unknown_class_index
+
+        known_acc = accuracy_score(known_true, known_pred_final)
+        known_macro_f1 = f1_score(known_true, known_pred_final, average='macro', labels=np.unique(known_true))
+        known_recall = recall_score(known_true, known_pred_final, average='macro', labels=np.unique(known_true))
+
+        print(f"  - Known Accuracy: {known_acc:.4f}")
+        print(f"  - Known Macro F1: {known_macro_f1:.4f}")
+        print(f"  - Known Recall: {known_recall:.4f}")
+        print(f"  - UNKNOWN Precision: {unknown_prec:.4f}")
+        print(f"  - UNKNOWN Recall: {unknown_rec:.4f}")
+        print(f"  - UNKNOWN F1: {unknown_f1:.4f}")
+        print(f"  - FAR: {far:.4f}")
+        print(f"  - FDR: {fdr:.4f}")
+        print(f"  - KRR: {krr:.4f}")
+        print(f"  - AUROC: {auc_roc:.4f}")
+        print(f"  - AUPR: {auc_pr:.4f}")
 
 
 if __name__ == "__main__":
