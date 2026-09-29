@@ -39,6 +39,14 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default="ciciot2023",
+        choices=["ciciot2023", "edgeiiot"],
+        help="Dataset type",
+    )
+
+    parser.add_argument(
         "--withhold_open_set",
         action="store_true",
         help="True open-set: withhold MITM/VulnScan/BruteForce from TRAINING",
@@ -154,7 +162,7 @@ def main():
     # PATHS
     # ============================================================
 
-    data_dir = "CICIOT23"
+    data_dir = os.environ.get('EDGEIIOT_DATA_DIR', 'CICIOT23') if args.dataset == 'edgeiiot' else 'CICIOT23'
     artifact_dir = "results/baselines"
 
     development_subset_path = (
@@ -184,19 +192,25 @@ def main():
         with open(label_mapping_path) as f:
             label_mapping = _json.load(f)
 
-        label_to_int = label_mapping["multiclass"]["label_to_int"]
-
-        withheld_names = [
-            "MITM-ArpSpoofing",
-            "VulnerabilityScan",
-            "DictionaryBruteForce",
-        ]
-
-        withheld_for_train = [
-            label_to_int[name]
-            for name in withheld_names
-            if name in label_to_int
-        ]
+        if args.dataset == 'ciciot2023':
+            label_to_int = label_mapping["multiclass"]["label_to_int"]
+            withheld_names = [
+                "MITM-ArpSpoofing",
+                "VulnerabilityScan",
+                "DictionaryBruteForce",
+            ]
+            withheld_for_train = [
+                label_to_int[name]
+                for name in withheld_names
+                if name in label_to_int
+            ]
+        else:
+            withheld_names = [
+                "MITM",
+                "Password",
+                "Vulnerability_scanner",
+            ]
+            withheld_for_train = withheld_names  # pass names directly to dataset.py
 
         print(
             f"True open-set enabled: withholding {withheld_names} "
@@ -227,6 +241,7 @@ def main():
                 "results",
                 args.experiment_name,
             ),
+            dataset_type=args.dataset,
         )
     )
 
@@ -414,25 +429,27 @@ def main():
     print("PER-WITHHELD-CLASS DISTANCE ANALYSIS")
     print("=" * 60)
 
-    val_csv_path = os.path.join(
-        data_dir,
-        "validation",
-        "validation.csv",
-    )
+    if args.dataset == 'ciciot2023':
+        val_csv_path = os.path.join(data_dir, "validation", "validation.csv")
+        original_val_labels = []
+        for chunk_df in pd.read_csv(val_csv_path, chunksize=100_000, usecols=["label"]):
+            original_val_labels.extend(chunk_df["label"].tolist())
+    else:
+        # Edge-IIoTset: read the full CSV and extract validation split
+        csv_path = os.environ.get('EDGEIIOT_DATA_DIR')
+        if not csv_path or not os.path.isfile(csv_path):
+            csv_path = os.path.join(data_dir, 'DNN-EdgeIIoT-dataset.csv')
 
-    # Recover original validation labels.
-    # The processed memmap maps all withheld classes to UNKNOWN,
-    # so we read only the original label column here.
-    original_val_labels = []
-
-    for chunk_df in pd.read_csv(
-        val_csv_path,
-        chunksize=100_000,
-        usecols=["label"],
-    ):
-        original_val_labels.extend(
-            chunk_df["label"].tolist()
-        )
+        import numpy as np
+        df = pd.read_csv(csv_path, usecols=["Attack_type"], low_memory=False)
+        from sklearn.model_selection import StratifiedShuffleSplit
+        labels = df["Attack_type"].values
+        sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.15, random_state=42)
+        train_val_idx, test_idx = next(sss1.split(np.zeros(len(labels)), labels))
+        sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.15/0.85, random_state=42)
+        train_idx, val_idx = next(sss2.split(np.zeros(len(train_val_idx)), labels[train_val_idx]))
+        val_idx = train_val_idx[val_idx]
+        original_val_labels = labels[val_idx].tolist()
 
     original_val_labels = np.array(
         original_val_labels

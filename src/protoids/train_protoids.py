@@ -262,10 +262,13 @@ def evaluate_open_set(model, known_loader, unknown_loader, device,
     unknown_f1 = 2 * unknown_precision * unknown_recall / (unknown_precision + unknown_recall) if (unknown_precision + unknown_recall) > 0 else 0.0
 
     # False acceptance rate (FAR): unknown samples predicted as known / total unknown samples
-    far = fp / (fp + tp) if (fp + tp) > 0 else 0.0
+    far = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+
+    # False discovery rate (FDR): known samples predicted as unknown / total predicted unknown
+    fdr = fp / (fp + tp) if (fp + tp) > 0 else 0.0
 
     # Known rejection rate (KRR): known samples predicted as unknown / total known samples
-    krr = fn / (fn + tn) if (fn + tn) > 0 else 0.0
+    krr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
     # Compute ROC-AUC and AUPR for unknown detection
     try:
@@ -306,6 +309,7 @@ def evaluate_open_set(model, known_loader, unknown_loader, device,
         'unknown_recall': float(unknown_recall),
         'unknown_f1': float(unknown_f1),
         'far': float(far),  # False acceptance rate
+        'fdr': float(fdr),  # False discovery rate
         'krr': float(krr),  # Known rejection rate
         'auc_roc': float(auc_roc),
         'auc_pr': float(auc_pr),
@@ -752,6 +756,7 @@ def main():
     print(f"  - Unknown Recall: {open_set_metrics['unknown_recall']:.4f}")
     print(f"  - Unknown F1: {open_set_metrics['unknown_f1']:.4f}")
     print(f"  - FAR (False Acceptance Rate): {open_set_metrics['far']:.4f}")
+    print(f"  - FDR (False Discovery Rate): {open_set_metrics['fdr']:.4f}")
     print(f"  - KRR (Known Rejection Rate): {open_set_metrics['krr']:.4f}")
     print(f"  - AUROC: {open_set_metrics['auc_roc']:.4f}")
     print(f"  - AUPR: {open_set_metrics['auc_pr']:.4f}")
@@ -820,6 +825,7 @@ def main():
     print(f"  - Unknown Recall: {open_set_test_metrics['unknown_recall']:.4f}")
     print(f"  - Unknown F1: {open_set_test_metrics['unknown_f1']:.4f}")
     print(f"  - FAR (False Acceptance Rate): {open_set_test_metrics['far']:.4f}")
+    print(f"  - FDR (False Discovery Rate): {open_set_test_metrics['fdr']:.4f}")
     print(f"  - KRR (Known Rejection Rate): {open_set_test_metrics['krr']:.4f}")
     print(f"  - AUROC: {open_set_test_metrics['auc_roc']:.4f}")
     print(f"  - AUPR: {open_set_test_metrics['auc_pr']:.4f}")
