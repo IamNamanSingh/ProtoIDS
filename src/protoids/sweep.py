@@ -22,11 +22,17 @@ import json
 import os
 import sys
 import time
+import warnings
 from typing import Dict, List, Optional
 
 import numpy as np
 import torch
 from sklearn.metrics import (average_precision_score, roc_auc_score)
+
+# memmap-backed tensors are read-only; the resulting torch warning is expected
+# and would otherwise repeat for every batch of every trial.
+warnings.filterwarnings("ignore", message=".*not writable.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="torch.*")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -39,6 +45,76 @@ from protoids.training import train_protoids                      # noqa: E402
 # Evaluation
 # ---------------------------------------------------------------------------
 
+class GpuResidentLoader:
+    """
+    Keeps a whole split in GPU memory and yields shuffled mini-batches.
+
+    The cached split is only ~160 MB in total, so holding it on the device
+    removes the memmap read that otherwise dominates wall-clock time (the model
+    is tiny, so the GPU was sitting idle at ~40% waiting on I/O). Falls back to
+    plain slicing when the split does not fit, so large CICIoT2023 runs still
+    work.
+    """
+
+    def __init__(self, loader, device, seed=42):
+        ds = loader.dataset
+        self.device = device
+        self.unknown_class_index = getattr(ds, 'unknown_class_index', None)
+        xs, ys = [], []
+        for xb, yb in loader:
+            xs.append(xb)
+            ys.append(yb)
+        X = torch.cat(xs)
+        y = torch.cat(ys)
+        self.resident = True
+        try:
+            self.X = X.to(device)
+            self.y = y.to(device)
+        except (torch.cuda.OutOfMemoryError, RuntimeError):
+            self.resident = False
+            self.X, self.y = X, y
+        self.n = len(y)
+        self.batch_size = loader.batch_size
+        # The generator must live on the same device as the tensors it indexes,
+        # hence self.X (already moved) rather than the local CPU copy.
+        self.generator = torch.Generator(device=self.X.device).manual_seed(seed)
+
+    def __len__(self):
+        return (self.n + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        # Held resident: index the GPU tensors directly, no host round-trip.
+        if self.resident:
+            perm = torch.randperm(self.n, device=self.X.device,
+                                  generator=self.generator)
+            for i in range(0, self.n, self.batch_size):
+                idx = perm[i:i + self.batch_size]
+                yield self.X[idx], self.y[idx]
+        else:
+            order = torch.randperm(self.n, generator=self.generator).tolist()
+            for i in range(0, self.n, self.batch_size):
+                idx = order[i:i + self.batch_size]
+                yield self.X[idx].to(self.device), self.y[idx].to(self.device)
+
+    @property
+    def dataset(self):
+        return _ResidentView(self)
+
+
+class _ResidentView:
+    """Duck-types the few attributes train_protoids reads off a DataLoader."""
+
+    def __init__(self, loader):
+        self._l = loader
+        self.unknown_class_index = loader.unknown_class_index
+
+    def get_unknown_class_index(self):
+        return self.unknown_class_index
+
+    def __len__(self):
+        return self._l.n
+
+
 @torch.no_grad()
 def _distances(model, loader, device):
     """Nearest-prototype cosine distance and the argmin class for every row."""
@@ -47,13 +123,13 @@ def _distances(model, loader, device):
     protos = model.prototype_layer.prototypes
     for xb, yb in loader:
         xb = xb.to(device, non_blocking=True)
-        emb = model.encoder(xb)[1] if isinstance(model.encoder(xb), tuple) \
-            else model.encoder(xb)
+        out = model.encoder(xb)
+        emb = out[1] if isinstance(out, tuple) else out
         d = torch.cdist(emb, protos)
         min_d, arg = d.min(dim=1)
-        dists.append(min_d.cpu().numpy())
-        preds.append(arg.cpu().numpy())
-        labels.append(yb.numpy())
+        dists.append(min_d.detach().cpu().numpy())
+        preds.append(arg.detach().cpu().numpy())
+        labels.append(yb.detach().cpu().numpy())
     return (np.concatenate(dists), np.concatenate(preds), np.concatenate(labels))
 
 
@@ -103,7 +179,9 @@ def evaluate_config(cfg: Dict, processed_dir: str, device: torch.device,
                     cache: Dict, output_dir: Optional[str] = None,
                     verbose: bool = True) -> Dict:
     """Train one configuration and score it on validation (never on test)."""
-    tr, va, te, num_classes, input_dim = cache['loaders']
+    tr, va, te = cache['loaders']
+    num_classes = cache['num_classes']
+    input_dim = cache['input_dim']
     unknown_idx = cache['unknown_class_index']
 
     torch.manual_seed(cfg['seed'])
@@ -124,15 +202,20 @@ def evaluate_config(cfg: Dict, processed_dir: str, device: torch.device,
         for xb, yb in tr:
             out = model.encoder(xb.to(device))
             e = out[1] if isinstance(out, tuple) else out
-            embs.append(e.cpu()); labs.append(yb)
+            embs.append(e.detach().cpu())
+            labs.append(yb.detach().cpu())
     model.prototype_layer.initialize_prototypes(torch.cat(embs), torch.cat(labs))
 
     t0 = time.time()
+    ckpt_dir = None
+    if output_dir:
+        ckpt_dir = os.path.join(output_dir, cfg['name'])
+        os.makedirs(ckpt_dir, exist_ok=True)
     history = train_protoids(
         model=model, train_loader=tr, val_loader=va, device=device,
         num_epochs=cfg['epochs'], learning_rate=cfg['learning_rate'],
         lambda_compact=cfg['lambda_compact'], class_weights=None, verbose=False,
-        checkpoint_dir=os.path.join(output_dir, cfg['name']) if output_dir else None,
+        checkpoint_dir=ckpt_dir,
     )
     train_secs = time.time() - t0
 
@@ -141,10 +224,21 @@ def evaluate_config(cfg: Dict, processed_dir: str, device: torch.device,
     val_metrics = _open_set_metrics(d_val, p_val, y_val, unknown_idx, thr)
 
     try:
-        val_metrics['auroc'] = float(roc_auc_score(
-            (y_val == unknown_idx).astype(int), -d_val))
-        val_metrics['aupr'] = float(average_precision_score(
-            (y_val == unknown_idx).astype(int), -d_val))
+        # Score = the distance itself: an unknown sample is flagged when it is
+        # FAR from every known prototype, so a LARGER distance must mean a
+        # HIGHER chance of being unknown. Negating here would invert the AUROC
+        # and make the search reward the worst possible models.
+        is_unknown = (y_val == unknown_idx).astype(int)
+        val_metrics['auroc'] = float(roc_auc_score(is_unknown, d_val))
+        val_metrics['aupr'] = float(average_precision_score(is_unknown, d_val))
+        # An AUROC below 0.5 means the score points the wrong way, i.e. unknown
+        # samples sit CLOSER to the prototypes than known ones. That is a bug,
+        # not a result, so fail loudly instead of letting the search optimise it.
+        if val_metrics['auroc'] < 0.5:
+            raise RuntimeError(
+                f"AUROC {val_metrics['auroc']:.3f} < 0.5: the distance score is "
+                f"inverted (unknowns are closer than knowns). Check the sign "
+                f"convention in _distances/evaluate_config before trusting any metric.")
     except ValueError:
         val_metrics['auroc'] = float('nan')
         val_metrics['aupr'] = float('nan')
@@ -152,7 +246,10 @@ def evaluate_config(cfg: Dict, processed_dir: str, device: torch.device,
     # Rank-threshold-free separation, useful as a tie-breaker.
     val_metrics['mean_known_dist'] = float(d_val[y_val != unknown_idx].mean())
     val_metrics['mean_unknown_dist'] = float(d_val[y_val == unknown_idx].mean())
-    val_metrics['final_train_loss'] = float(history[-1].get('train_loss', float('nan')))
+    tl = history.get('train_loss') or []
+    vl = history.get('val_accuracy') or []
+    val_metrics['final_train_loss'] = float(tl[-1]) if tl else float('nan')
+    val_metrics['final_val_accuracy'] = float(vl[-1]) if vl else float('nan')
 
     if verbose:
         print(f"  known_acc={val_metrics['known_accuracy']:.4f}  "
@@ -187,10 +284,17 @@ def score(m: Dict, weights: Dict[str, float]) -> float:
 # Search space
 # ---------------------------------------------------------------------------
 
-def build_grid(stage: str, seed: int = 42) -> List[Dict]:
+# Fixed for every trial. Batch size and epoch count are held constant so that
+# differences between configurations are attributable to the hyper-parameters
+# under study rather than to the optimisation budget.
+BATCH_SIZE = 256
+EPOCHS = 10
+
+
+def build_grid(stage: str, seed: int = 42, epochs: int = EPOCHS) -> List[Dict]:
     """Coarse first, then refine around the winner. Keeps the search small."""
     base = dict(embedding_dim=32, num_prototypes=3, dropout_rate=0.2,
-                learning_rate=1e-3, lambda_compact=0.1, epochs=10,
+                learning_rate=1e-3, lambda_compact=0.1, epochs=epochs,
                 threshold_percentile=90.0, seed=seed)
     grid: List[Dict] = []
 
@@ -212,12 +316,11 @@ def build_grid(stage: str, seed: int = 42) -> List[Dict]:
         for p in (80, 85, 90, 95, 97, 99):
             grid.append({**base, 'name': f"thr{p}", 'threshold_percentile': float(p)})
     elif stage == 'optim':
+        # Epoch count is deliberately NOT a search dimension (see EPOCHS).
         for lr in (5e-4, 1e-3, 3e-3):
             for drop in (0.1, 0.2, 0.35):
-                for ep in (20, 40):
-                    grid.append({**base, 'name': f"lr{lr}_do{drop}_ep{ep}",
-                                 'learning_rate': lr, 'dropout_rate': drop,
-                                 'epochs': ep})
+                grid.append({**base, 'name': f"lr{lr}_do{drop}",
+                             'learning_rate': lr, 'dropout_rate': drop})
     else:
         raise ValueError(f"unknown stage: {stage}")
 
@@ -230,6 +333,10 @@ def main():
     ap.add_argument('--processed', required=True, help='cached processed dir')
     ap.add_argument('--stage', default='coarse',
                     choices=['coarse', 'lambda', 'k', 'threshold', 'optim'])
+    ap.add_argument('--batch-size', type=int, default=BATCH_SIZE,
+                    help=f'fixed for every trial (default {BATCH_SIZE})')
+    ap.add_argument('--epochs', type=int, default=EPOCHS,
+                    help=f'fixed for every trial (default {EPOCHS})')
     ap.add_argument('--out', default=None, help='where to write results JSON')
     ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=42)
@@ -246,11 +353,12 @@ def main():
                'auroc': args.w_auroc}
 
     tr, va, te, num_classes, input_dim = create_loaders_from_cache(
-        args.processed, batch_size=256)
+        args.processed, batch_size=args.batch_size)
     with open(os.path.join(args.processed, 'split_meta.json')) as f:
         meta = json.load(f)
 
     print(f"cached split : {args.processed}")
+    print(f"fixed budget : batch={args.batch_size} epochs={args.epochs}")
     print(f"  classes    : {num_classes} ({len(meta['known_classes'])} known"
           f" + {'1 unknown' if meta['open_set'] else 'closed-set'})")
     print(f"  withheld   : {meta['withheld_classes']}")
@@ -259,8 +367,18 @@ def main():
     print(f"device       : {device}")
     print(f"objective    : {weights}\n")
 
-    cache = {'loaders': (tr, va, te), 'unknown_class_index': meta['unknown_class_index']}
-    grid = build_grid(args.stage, args.seed)
+    cache = {'loaders': (tr, va, te), 'num_classes': num_classes,
+             'input_dim': input_dim,
+             'unknown_class_index': meta['unknown_class_index']}
+
+    if device.type == 'cuda':
+        print(f"moving the split onto {device} (train {meta['counts']['train']} rows)")
+        t0 = time.time()
+        cache['loaders'] = tuple(GpuResidentLoader(ld, device, args.seed)
+                                 for ld in cache['loaders'])
+        print(f"  resident in {time.time() - t0:.1f}s\n", flush=True)
+
+    grid = build_grid(args.stage, args.seed, epochs=args.epochs)
     if args.limit:
         grid = grid[:args.limit]
 
@@ -303,8 +421,8 @@ def main():
                                          best['_threshold'])
         try:
             is_unk = (y_te == cache['unknown_class_index']).astype(int)
-            test_metrics['auroc'] = float(roc_auc_score(is_unk, -d_te))
-            test_metrics['aupr'] = float(average_precision_score(is_unk, -d_te))
+            test_metrics['auroc'] = float(roc_auc_score(is_unk, d_te))
+            test_metrics['aupr'] = float(average_precision_score(is_unk, d_te))
         except ValueError:
             test_metrics['auroc'] = test_metrics['aupr'] = float('nan')
         for k, v in test_metrics.items():
