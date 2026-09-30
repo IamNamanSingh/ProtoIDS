@@ -69,3 +69,16 @@ venv.bak/
 .DS_Store
 # Thumbs.db (Windows)
 Thumbs.db
+
+# Added for ProtoIDS artifact and data ignoring
+backups/
+datasets/
+*.pth
+*.pt
+*.ckpt
+*.npy
+*.npz
+memmap/
+CICIOT23/
+Kaggle/
+Colab/

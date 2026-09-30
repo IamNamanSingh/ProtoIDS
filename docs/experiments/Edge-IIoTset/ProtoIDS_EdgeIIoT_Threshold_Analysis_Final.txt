@@ -1,0 +1,340 @@
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:643: DtypeWarning: Columns (39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:643: DtypeWarning: Columns (39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:643: DtypeWarning: Columns (39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:643: DtypeWarning: Columns (39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:643: DtypeWarning: Columns (13,14,17,34,39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:643: DtypeWarning: Columns (11,13,14,17) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:643: DtypeWarning: Columns (11,13,14,17) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:643: DtypeWarning: Columns (11,13,14,17) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=initial_feature_cols, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:773: DtypeWarning: Columns (39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:773: DtypeWarning: Columns (39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:773: DtypeWarning: Columns (39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:773: DtypeWarning: Columns (39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:773: DtypeWarning: Columns (13,14,17,34,39) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:773: DtypeWarning: Columns (11,13,14,17) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:773: DtypeWarning: Columns (11,13,14,17) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:773: DtypeWarning: Columns (11,13,14,17) have mixed types. Specify dtype option on import or set low_memory=False.
+  for chunk in pd.read_csv(csv_path, usecols=usecols_pass4, chunksize=chunksize):
+/kaggle/working/ProtoIDS/analysis/../src/protoids/dataset.py:68: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:213.)
+  features = torch.from_numpy(self.features[idx]).float()
+Starting threshold analysis...
+Using device: cpu
+True open-set enabled: withholding ['MITM', 'Password', 'Vulnerability_scanner'] -> indices ['MITM', 'Password', 'Vulnerability_scanner'] from TRAINING
+Loading data...
+Loading Edge-IIoTset dataset from: /kaggle/input/datasets/mohamedamineferrag/edgeiiotset-cyber-security-dataset-of-iot-iiot/Edge-IIoTset dataset/Selected dataset for ML and DL/DNN-EdgeIIoT-dataset.csv
+Number of features after removing leakage and label columns: 48
+Pass 1: Collecting unique Attack_type values...
+Found 15 unique Attack_type values.
+Known classes: 12, Withheld classes: 3
+Pass 2: Reading Attack_type IDs for each row...
+Total rows: 2219201
+Train+val+test sizes: 1553440 332880 332881
+Total raw training partition (before withholding exclusion): 1553440
+Known training samples used for scaler.fit: 1482407
+Withheld training samples excluded from scaler.fit: 71033
+Pass 3: Computing statistics for scaling and constant column detection...
+  Processed 10 chunks...
+  Processed 20 chunks...
+Constant columns found in training data (will be removed): ['icmp.unused', 'http.file_data', 'http.request.uri.query', 'http.request.method', 'http.request.version', 'http.tls_port', 'dns.qry.name.len', 'dns.qry.type', 'mqtt.msg_decoded_as']
+Number of features after removing constant columns: 39
+Pass 4: Creating memmap arrays...
+Processed data will be saved to: experiments/processed/edgeiiot_open_set_k3_lambda01_run3
+  Writing memmap arrays (this may take a while)...
+  Processed 10 chunks for writing...
+  Processed 20 chunks for writing...
+  Training samples written: 1482407
+  Validation samples written: 332880
+  Test samples written: 332881
+Number of classes: 13
+Input dimension: 39
+Saving scaler and label mappings to experiments/results/edgeiiot_open_set_k3_lambda01_run3
+Saved scaler, feature manifest, and label mapping to experiments/results/edgeiiot_open_set_k3_lambda01_run3
+Validation batches: 1301
+Test batches: 1301 (not used for threshold selection)
+Unknown class index: 12
+Loading model from experiments/models/edgeiiot_open_set_k3_lambda01_run3/model.pth
+Collecting validation data...
+Collected per-class distances: (332880, 12)
+Collected 332880 validation samples
+Known samples: 317658
+
+============================================================
+PER-WITHHELD-CLASS DISTANCE ANALYSIS
+============================================================
+Original validation labels loaded: 332880
+
+Withheld-class distance distributions:
+Class                              Count         P50         P75         P90         P95         P99        Mean
+MITM                                 182    0.218820    0.218820    0.218820    0.218820    0.473584    0.160507
+  Range: 0.007823 - 0.473584
+Password                            7523    0.069465    0.122568    0.191295    0.215599    0.275998    0.086636
+  Range: 0.001526 - 0.358497
+Vulnerability_scanner               7517    0.148338    0.168882    0.169390    0.171726    0.228633    0.141302
+  Range: 0.004334 - 0.285905
+
+============================================================
+PER-WITHHELD-CLASS KNOWN-CLASS DISTANCES
+============================================================
+
+Closest known classes by median prototype distance:
+
+MITM:
+  Known class                         Median        Mean         P90
+  Normal                            0.218820    0.168159    0.218820
+  Ransomware                        0.361401    0.474282    0.683972
+  Port_Scanning                     0.364175    0.519048    0.816819
+  XSS                               0.376596    0.456307    0.605181
+  Backdoor                          0.391977    0.472215    0.615397
+  Uploading                         0.524868    0.529128    0.560737
+  DDoS_UDP                          0.526622    0.623301    0.777849
+  Fingerprinting                    0.539174    0.626703    0.765630
+  DDoS_HTTP                         0.570776    0.548976    0.570776
+  SQL_injection                     0.580681    0.646588    0.836226
+
+Password:
+  Known class                         Median        Mean         P90
+  DDoS_HTTP                         0.212157    0.219537    0.367333
+  SQL_injection                     0.339413    0.335965    0.695156
+  Uploading                         0.426702    0.393344    0.578739
+  XSS                               0.493706    0.466847    0.668188
+  Normal                            0.567605    0.435050    0.690704
+  Backdoor                          0.693691    0.700218    0.799172
+  Ransomware                        0.706576    0.696947    0.775885
+  DDoS_UDP                          0.846269    0.849081    0.932083
+  Fingerprinting                    0.866799    0.871256    0.955393
+  Port_Scanning                     0.890406    0.884717    1.052576
+
+Vulnerability_scanner:
+  Known class                         Median        Mean         P90
+  DDoS_HTTP                         0.168538    0.171024    0.256179
+  XSS                               0.288280    0.317308    0.594823
+  SQL_injection                     0.461276    0.431237    0.491601
+  Normal                            0.650708    0.587968    0.681654
+  Backdoor                          0.661218    0.664318    0.731792
+  Uploading                         0.706694    0.632696    0.719249
+  Ransomware                        0.708855    0.709142    0.764102
+  DDoS_TCP                          0.719037    0.779814    0.964890
+  Port_Scanning                     0.896505    0.909358    0.948514
+  DDoS_UDP                          0.901330    0.875731    0.906094
+
+============================================================
+UNKNOWN ATTACK ABSORPTION ANALYSIS
+============================================================
+
+Known-class predictions for each withheld attack:
+
+MITM:
+  Total samples: 182
+  Predicted as UNKNOWN before threshold: 0
+  Predicted as known class: 182
+  Top known-class predictions:
+    Normal                              179 ( 98.35%)
+    SQL_injection                         3 (  1.65%)
+
+Password:
+  Total samples: 7523
+  Predicted as UNKNOWN before threshold: 0
+  Predicted as known class: 7523
+  Top known-class predictions:
+    SQL_injection                      2634 ( 35.01%)
+    Normal                             2151 ( 28.59%)
+    DDoS_HTTP                          1757 ( 23.36%)
+    Uploading                           976 ( 12.97%)
+    Port_Scanning                         3 (  0.04%)
+    XSS                                   2 (  0.03%)
+
+Vulnerability_scanner:
+  Total samples: 7517
+  Predicted as UNKNOWN before threshold: 0
+  Predicted as known class: 7517
+  Top known-class predictions:
+    DDoS_HTTP                          6267 ( 83.37%)
+    Normal                              616 (  8.19%)
+    SQL_injection                       357 (  4.75%)
+    Uploading                           275 (  3.66%)
+    XSS                                   1 (  0.01%)
+    Ransomware                            1 (  0.01%)
+Unknown samples: 15222
+
+============================================================
+DISTANCE DISTRIBUTION ANALYSIS (VALIDATION SET)
+============================================================
+
+Minimum prototype distance:
+Percentile         Known     Unknown
+P50            0.005430    0.120908
+P75            0.025519    0.168585
+P90            0.057104    0.169765
+P95            0.084564    0.199402
+P99            0.168013    0.261991
+P99.5          0.218820    0.279216
+P99.9          0.228907    0.327339
+
+Summary:
+Known samples:   317,658
+Unknown samples: 15,222
+
+Known distance range:   0.000295 - 0.468363
+Unknown distance range: 0.001526 - 0.473584
+
+Known mean:   0.020741
+Unknown mean: 0.114515
+Known median:   0.005430
+Unknown median: 0.120908
+Sweeping threshold from 0.0000 to 0.4918 in 1000 steps
+
+============================================================
+THRESHOLD ANALYSIS RESULTS (VALIDATION SET)
+============================================================
+Threshold that maximizes unknown F1: 0.0970
+  Unknown F1: 0.4982
+  Unknown Precision: 0.4164
+  Unknown Recall: 0.6202
+  FAR: 0.3798
+  KRR: 0.0417
+  Known Acceptance Rate: 0.9583
+  Known Macro F1: 0.6942
+
+------------------------------------------------------------
+THRESHOLDS FOR TARGET FAR VALUES
+------------------------------------------------------------
+Target FAR 1%:
+  Threshold: 0.0089
+  Achieved FAR: 0.0087
+  Unknown Precision: 0.1031
+  Unknown Recall: 0.9913
+  Unknown F1: 0.1867
+  KRR: 0.4134
+  Known Acceptance Rate: 0.5866
+  Known Macro F1: 0.2951
+
+Target FAR 5%:
+  Threshold: 0.0162
+  Achieved FAR: 0.0486
+  Unknown Precision: 0.1234
+  Unknown Recall: 0.9514
+  Unknown F1: 0.2185
+  KRR: 0.3237
+  Known Acceptance Rate: 0.6763
+  Known Macro F1: 0.3941
+
+Target FAR 10%:
+  Threshold: 0.0286
+  Achieved FAR: 0.1001
+  Unknown Precision: 0.1590
+  Unknown Recall: 0.8999
+  Unknown F1: 0.2703
+  KRR: 0.2281
+  Known Acceptance Rate: 0.7719
+  Known Macro F1: 0.4560
+
+Target FAR 20%:
+  Threshold: 0.0502
+  Achieved FAR: 0.1994
+  Unknown Precision: 0.2343
+  Unknown Recall: 0.8006
+  Unknown F1: 0.3625
+  KRR: 0.1254
+  Known Acceptance Rate: 0.8746
+  Known Macro F1: 0.5765
+
+Target FAR 30%:
+  Threshold: 0.0743
+  Achieved FAR: 0.2991
+  Unknown Precision: 0.3486
+  Unknown Recall: 0.7009
+  Unknown F1: 0.4656
+  KRR: 0.0628
+  Known Acceptance Rate: 0.9372
+  Known Macro F1: 0.6340
+
+------------------------------------------------------------
+Current threshold from experiment: 0.0571
+At this threshold:
+  Unknown F1: 0.3983
+  FAR: 0.2323
+============================================================
+
+============================================================
+PER-WITHHELD-CLASS OPERATING METRICS AT FIXED THRESHOLDS
+============================================================
+
+Threshold: 0.0571
+  MITM                          
+    UNKNOWN Recall: 0.7253
+    FAR:            0.2747
+    Median dist:    0.218820
+    P90 dist:       0.218820
+  Password                      
+    UNKNOWN Recall: 0.5790
+    FAR:            0.4210
+    Median dist:    0.069465
+    P90 dist:       0.191295
+  Vulnerability_scanner         
+    UNKNOWN Recall: 0.9576
+    FAR:            0.0424
+    Median dist:    0.148338
+    P90 dist:       0.169390
+
+Threshold: 0.0970
+  MITM                          
+    UNKNOWN Recall: 0.7253
+    FAR:            0.2747
+    Median dist:    0.218820
+    P90 dist:       0.218820
+  Password                      
+    UNKNOWN Recall: 0.3533
+    FAR:            0.6467
+    Median dist:    0.069465
+    P90 dist:       0.191295
+  Vulnerability_scanner         
+    UNKNOWN Recall: 0.8844
+    FAR:            0.1156
+    Median dist:    0.148338
+    P90 dist:       0.169390
+
+============================================================
+TEST EVALUATION AT FIXED THRESHOLDS
+============================================================
+Collecting test data...
+
+Evaluating Test Set at Threshold: 0.0571
+  - Known Accuracy: 0.8920
+  - Known Macro F1: 0.6016
+  - Known Recall: 0.5291
+  - UNKNOWN Precision: 0.2678
+  - UNKNOWN Recall: 0.7686
+  - UNKNOWN F1: 0.3972
+  - FAR: 0.2314
+  - FDR: 0.7322
+  - KRR: 0.1007
+  - AUROC: 0.9281
+  - AUPR: 0.3847
+
+Evaluating Test Set at Threshold: 0.0970
+  - Known Accuracy: 0.9465
+  - Known Macro F1: 0.7072
+  - Known Recall: 0.6496
+  - UNKNOWN Precision: 0.4167
+  - UNKNOWN Recall: 0.6221
+  - UNKNOWN F1: 0.4991
+  - FAR: 0.3779
+  - FDR: 0.5833
+  - KRR: 0.0417
+  - AUROC: 0.9281
+  - AUPR: 0.3847

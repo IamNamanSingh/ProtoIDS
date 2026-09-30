@@ -223,22 +223,38 @@ F. **Intermediate disk storage**: Save processed chunks to disk if needed, then 
 - `HANDOVER.md` - **THIS FILE** - Single source of truth for project state
 - `requirements.txt` - Python dependencies
 - `reports/dataset_forensic_report.md` - Dataset analysis
+- `docs/ARTIFACTS_AND_BACKUPS.md` - Inventory of experimental backups
+- `docs/EXPERIMENT_LOG.md`: Chronological experiment log
+- `docs/REPRODUCIBILITY.md`: Reproducibility guidelines
+- `docs/RESEARCH_DECISIONS.md`: Key research decisions and justifications
+- `docs/FRONTEND_HANDOVER.md`: Guidelines for frontend/demo development
+- `docs/NEXT_PERSON_XIIOTID.md`: Specific instructions for X-IIoTID dataset handling
+- `docs/experiments/CICIoT2023/`: CICIoT2023 experiment documentation and results
+- `docs/experiments/Edge-IIoTset/`: Edge-IIoTset experiment documentation and results
+- `results/documented/CICIoT2023/`: Final documented results for CICIoT2023
+- `results/documented/Edge-IIoTset/`: Final documented results for Edge-IIoTset
 
 ## Current Git State
 
 - **Current Branch:** `protoids-next` (up to date with origin/protoids-next)
-- **Latest Commit:** `e6cadb3` - "Update progress: full 5.5M 0.9616/0.6684 vs dev 0.84, dataset sizes, AE64 0.862"
+- **Latest Commit:** `97f4821` - "fix: resolve validation f1_score scoping error"
 - **Working Tree Status:** **NOT CLEAN** - has uncommitted changes
 - **Important Branches:** 
   - `main` (stable baseline)
   - `protoids-next` (current development branch)
+  - `protoids-edgeiiot` (Edge-IIoTset experiments)
+  - `protoids-merge` (merge branch)
 
 **Uncommitted Changes:**
-- Modified: `src/protoids/dataset.py` (our fixes for scaling leakage)
-- Modified: `src/protoids/train_protoids.py` (minor adjustments)
-- Numerous untracked files (test scripts, outputs, etc.)
+- Modified: `analysis/analyze_threshold_debug.py` (debug script for threshold analysis)
+- Modified: `docs/ARTIFACTS_AND_BACKUPS.md` (new file)
+- Modified: `docs/experiments/Edge-IIoTset/ProtoIDS_EdgeIIoT_Threshold_Analysis_Final.txt` (copied file)
+- Modified: `README.md` (updated with final handoff information)
+- Modified: `HANDOVER.md` (this file - being updated)
+- Untracked: `analysis/analyze_threshold.py.bak` (backup of threshold analysis script)
+- Untracked: `backups/` (organized backup directory)
 
-**Note:** The fixes to `src/protoids/dataset.py` have **not yet been committed**. The next developer should review these changes and commit them appropriately.
+**Note:** The backups directory has been organized and documented. The `backups/` directory is ignored by git (see .gitignore).
 
 ## What Has Been Completed
 
@@ -254,6 +270,14 @@ F. **Intermediate disk storage**: Save processed chunks to disk if needed, then 
 [✓] **Corrected scaler fitting protocol** (fixed AttributeError)  
 [✓] Unit tests for label mapping logic  
 [✓] Integration testing of corrected pipeline  
+[✓] Memory-efficient preprocessing approaches documented and prepared for implementation  
+[✓] **Backups organized and documented** in `docs/ARTIFACTS_AND_BACKUPS.md`  
+[✓] **README updated** with final handoff information, results, and guidance  
+[✓] **Experiment logs initiated** in `docs/EXPERIMENT_LOG.md`  
+[✓] **Reproducibility guidelines started** in `docs/REPRODUCIBILITY.md`  
+[✓] **Research decisions documented** in `docs/RESEARCH_DECISIONS.md`  
+[✓] **Frontend handover guidelines** in `docs/FRONTEND_HANDOVER.md`  
+[✓] **X-IIoTID next steps** in `docs/NEXT_PERSON_XIIOTID.md`  
 [ ] Memory-efficient full open-set experiment  
 [ ] Clean K=3 open-set experiment  
 [ ] Threshold sensitivity study  
@@ -267,7 +291,7 @@ F. **Intermediate disk storage**: Save processed chunks to disk if needed, then 
 
 ## Current Project Completion Estimate
 
-**Estimate:** 40% complete
+**Estimate:** 50% complete
 
 **What Is Included:**
 - Complete dataset forensic understanding
@@ -276,6 +300,8 @@ F. **Intermediate disk storage**: Save processed chunks to disk if needed, then 
 - Baseline models for comparison
 - Corrected open-set protocol (withholding → fitting → transforming)
 - All necessary bug fixes for initialization and label mapping
+- Comprehensive documentation and artifact organization
+- Clear handoff instructions for the next researcher
 
 **What Remains:**
 - Memory-efficient implementation to handle full 5.5M dataset
@@ -284,6 +310,7 @@ F. **Intermediate disk storage**: Save processed chunks to disk if needed, then 
 - Cross-dataset validation
 - Comparison with state-of-the-art methods
 - Final documentation and presentation materials
+- Implementation of memory-efficient preprocessing (next critical step)
 
 *Note: This estimate excludes "planned" work not yet implemented in the repository.*
 
@@ -291,7 +318,7 @@ F. **Intermediate disk storage**: Save processed chunks to disk if needed, then 
 
 The next developer should follow this **numbered sequence**:
 
-1. **Fix memory-efficient CICIoT2023 preprocessing** in `src/protoids/dataset.py`
+1. **Implement memory-efficient CICIoT2023 preprocessing** in `src/protoids/dataset.py`
    - Implement chunked processing or incremental StandardScaler fitting
    - **MUST** preserve exact scientific protocol: withhold first → fit scaler only on known training data → transform validation/test using same scaler
    
@@ -384,7 +411,7 @@ python src/protoids/train_protoids.py --withhold_open_set --full_data --experime
 5. **Do NOT use old leaked open-set results:** Any results from before the fixes are `"Invalid due to preprocessing leakage."`  
 6. **Inspect current git status:** `git status` to see uncommitted changes  
 7. **Review my fixes:** Examine changes to `src/protoids/dataset.py` and `src/protoids/train_protoids.py`  
-8. **Fix memory-efficient preprocessing:** Implement chunked/incremental processing in `src/protoids/dataset.py`  
+8. **Implement memory-efficient preprocessing:** Implement chunked/incremental processing in `src/protoids/dataset.py`  
    - **Critical:** Preserve exact protocol: withhold first → fit scaler only on known training data → transform validation/test using same scaler  
 9. **Run K=3 clean open-set experiment first:**
    ```bash
@@ -413,16 +440,21 @@ I have verified this handover document by:
 - ✅ Checking git status to accurately report branch, commit, and uncommitted changes  
 
 **Files Changed in this Update:**
-- `HANDOVER.md` (this file) - completely rewritten to reflect current state
+- `HANDOVER.md` (this file) - updated to reflect current state after backup organization and documentation
+- `README.md` - updated with final handoff information
+- `docs/ARTIFACTS_AND_BACKUPS.md` - new file documenting backups
+- `docs/experiments/Edge-IIoTset/ProtoIDS_EdgeIIoT_Threshold_Analysis_Final.txt` - copied threshold analysis
+- `analysis/analyze_threshold_debug.py` - modified debug script (to be reviewed)
+- `analysis/analyze_threshold.py.bak` - backup file (to be cleaned up)
 
 **Current Git Branch:** `protoids-next`  
-**Current Commit:** `e6cadb3`  
-**Uncommitted Changes:** Yes (modified `src/protoids/dataset.py` and `src/protoids/train_protoids.py`, plus numerous untracked test files)  
+**Current Commit:** `97f4821`  
+**Uncommitted Changes:** Yes (see above)
 
 **Exact Next Command the Next Developer Should Run:**
 ```bash
-# First, review my fixes to understand what was done
-git diff src/protoids/dataset.py
+# First, review the current state and backup organization
+git status
 
 # Then, implement memory-efficient preprocessing in src/protoids/dataset.py
 # After that, run the development subset experiment to verify:
@@ -436,4 +468,4 @@ python src/protoids/train_protoids.py --withhold_open_set --experiment_name prot
 
 ---
 
-*This HANDOVER.md document reflects the state of the repository as of the latest commit (`e6cadb3`) with the understanding that the fixes to `src/protoids/dataset.py` resolve the scaling leakage issue and enable the scientifically correct open-set protocol to proceed, pending resolution of the memory constraint for full dataset processing.*
+*This HANDOVER.md document reflects the state of the repository as of the latest commit (`97f4821`) with the understanding that the backups have been organized and documentation updated. The next critical step is implementing memory-efficient preprocessing to enable the full open-set experiment.*
