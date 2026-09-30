@@ -4,6 +4,7 @@ Handles loading, preprocessing, and creating data loaders for CICIoT2023 and Edg
 """
 
 import os
+import re
 import numpy as np
 import pandas as pd
 import json
@@ -916,16 +917,561 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
         print(f"Saved scaler, feature manifest, and label mapping to {scaler_save_dir}")
 
     return train_loader, val_loader, test_loader, num_classes, input_dim
+
+
+# ===========================================================================
+# X-IIoTID support
+# ===========================================================================
+# X-IIoTID is a single large CSV. We deliberately DISCOVER the schema at runtime
+# rather than hard-coding column names, because the published release mixes
+# versions (the Kaggle CSV has ~42 network features + 3 label levels, while the
+# paper's final release advertises 68 features across several views). Discovery
+# keeps the pipeline honest and version-tolerant.
+# ===========================================================================
+
+# Label columns. Mirrors of X-IIoTID disagree on naming, so we look for BOTH
+# the descriptive names (the 42-column Kaggle CSV) and the class1/class2/class3
+# triple (the 68-column release described in the paper, which is what the
+# authors' own archive contains):
+#     class1 -> 19 most granular attack types
+#     class2 -> 10 attack categories
+#     class3 -> binary Normal/Attack
+# Granularity is decided from the data, not from the numbering, so the code
+# keeps working if a mirror renames or reorders the columns.
+XIIOTID_LABEL_NAMES = ['Sub-Category', 'Attack Type', 'Attack Category', 'Label']
+XIIOTID_LABEL_PATTERN = re.compile(r'^class\d+$', re.IGNORECASE)
+
+# Leakage filter. Matching on raw substrings is not safe here: 'ip' occurs in
+# "Scr_ip_bytes" and 'id' occurs in "Avg_ideal_time", so plain substring
+# matching silently deletes real measured features. Instead we tokenise the
+# column name (underscores, punctuation AND camelCase) and only drop a column
+# when it carries an identifier token and no measurement token.
+#   Scr_port       -> [scr, port]         drop  (identifier)
+#   Scr_ip_bytes   -> [scr, ip, bytes]    keep  (byte counter, not an address)
+#   Avg_ideal_time -> [avg, ideal, time]  keep  ('id' is inside "ideal")
+#   Timestamp      -> [timestamp]         drop
+XIIOTID_ID_TOKENS = {
+    'ip', 'ips', 'mac', 'macs', 'port', 'ports',
+    'date', 'datetime', 'timestamp', 'time_stamp', 'id', 'ids', 'index',
+    'uuid', 'address', 'addresses', 'flowid',
+}
+# A measurement unit means the column records a quantity rather than an
+# identifier, so it wins over an incidental identifier token.
+XIIOTID_MEASURE_TOKENS = {
+    'bytes', 'byte', 'pkts', 'pkt', 'packet', 'packets', 'count', 'rate',
+    'ratio', 'length', 'size', 'time', 'duration', 'total', 'avg', 'std',
+    'num', 'proc', 's', 'kbmem', 'ldavg', 'tps', 'rtps', 'wtps',
+}
+
+
+def _tokenize_column(name: str) -> List[str]:
+    """Split a column name into lowercase tokens on punctuation and camelCase."""
+    spaced = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', str(name))
+    spaced = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', spaced)
+    return [t.lower() for t in re.split(r'[^A-Za-z0-9]+', spaced) if t]
+
+
+def looks_like_xiiotid_identifier(name: str) -> bool:
+    """True when the column name denotes an identifier/temporal/port field."""
+    tokens = _tokenize_column(name)
+    if not tokens:
+        return False
+    if any(t in XIIOTID_MEASURE_TOKENS for t in tokens):
+        return False
+    return any(t in XIIOTID_ID_TOKENS for t in tokens)
+
+# Columns that encode a third-party intrusion-detection verdict rather than
+# observed behaviour. They are not train/test leakage, but they let the model
+# read an existing classifier's answer instead of learning from traffic, which
+# inflates every metric. Dropped by default; set EXCLUDE_IDS_ALERTS=False to
+# keep them for an ablation.
+XIIOTID_IDS_ALERT_COLUMNS = ['anomaly_alert', 'OSSEC_alert', 'OSSEC_alert_level']
+XIIOTID_EXCLUDE_IDS_ALERTS = True
+
+
+def find_xiiotid_label_columns(columns: List[str]) -> List[str]:
+    """Return every column that looks like a label level, in discovery order."""
+    norm = {c.strip().lower(): c for c in columns}
+    found: List[str] = []
+    for name in XIIOTID_LABEL_NAMES:
+        if name.lower() in norm:
+            found.append(norm[name.lower()])
+    for c in columns:
+        if c not in found and XIIOTID_LABEL_PATTERN.match(c.strip()):
+            found.append(c)
+    return found
+
+
+def rank_xiiotid_label_columns(csv_path: str,
+                               columns: List[str]) -> List[Tuple[str, int]]:
+    """
+    Order the label columns from most to least granular using their cardinality.
+
+    Reading only the label columns is cheap, and deciding the target from the
+    data avoids hard-coding "class1 is the granular one" for a dataset that is
+    mirrored under several layouts.
+    """
+    candidates = find_xiiotid_label_columns(columns)
+    if not candidates:
+        raise ValueError(
+            f"No label column found. Looked for {XIIOTID_LABEL_NAMES} or a "
+            f"'class<N>' column. Dataset columns: {columns}"
+        )
+    counts = pd.read_csv(csv_path, usecols=candidates, low_memory=False)
+    ranked = sorted(((c, int(counts[c].nunique(dropna=True))) for c in candidates),
+                    key=lambda kv: -kv[1])
+    return ranked
+
+
+def discover_xiiotid_columns(columns: List[str], label_col: Optional[str] = None,
+                             exclude_ids_alerts: Optional[bool] = None
+                             ) -> Tuple[str, List[str], Dict[str, str]]:
+    """
+    Decide the target label column and which columns to drop.
+
+    ``label_col`` forces the target; otherwise the most granular label column
+    is chosen by the caller via rank_xiiotid_label_columns (it needs the file).
+
+    Returns (label_col, retained_features, removal_reasons).
+    """
+    if exclude_ids_alerts is None:
+        exclude_ids_alerts = XIIOTID_EXCLUDE_IDS_ALERTS
+
+    norm = {c.strip().lower(): c for c in columns}
+    label_columns = find_xiiotid_label_columns(columns)
+
+    if label_col is not None:
+        if label_col not in columns:
+            raise ValueError(
+                f"Requested label column '{label_col}' is not in the dataset. "
+                f"Available label columns: {label_columns}")
+    else:
+        if not label_columns:
+            raise ValueError(
+                f"Could not find a label column among {XIIOTID_LABEL_NAMES} or a "
+                f"'class<N>' column. Got: {columns}")
+        # Most specific descriptive name, else lowest-numbered class<N>.
+        named = [c for c in XIIOTID_LABEL_NAMES if c.lower() in norm]
+        if named:
+            label_col = norm[named[0].lower()]
+        else:
+            classlike = [c for c in label_columns if XIIOTID_LABEL_PATTERN.match(c.strip())]
+            label_col = sorted(classlike, key=lambda c: int(re.sub(r'\D', '', c)))[0]
+
+    # Every other label level is metadata, not a feature.
+    reasons: Dict[str, str] = {}
+    for c in label_columns:
+        if c != label_col:
+            reasons[c] = 'Label column (other granularity level)'
+
+    for c in columns:
+        if c in reasons or c == label_col:
+            continue
+        low = c.strip().lower()
+        if exclude_ids_alerts and c in XIIOTID_IDS_ALERT_COLUMNS:
+            reasons[c] = 'Third-party IDS verdict (anomaly_alert/OSSEC) - not observed behaviour'
+        elif low.startswith('unnamed'):
+            reasons[c] = 'Unnamed index column'
+        elif looks_like_xiiotid_identifier(c):
+            reasons[c] = (f'Identifier/temporal/port column (leakage risk) '
+                          f'- tokens={_tokenize_column(c)}')
+    features = [c for c in columns if c not in reasons and c != label_col]
+    return label_col, features, reasons
+
+
+def suggest_xiiotid_withheld(data_dir: str, label_col: Optional[str] = None,
+                             k: int = 3) -> Tuple[str, List[str], pd.Series]:
+    """
+    Inspect the X-IIoTID CSV and propose a default open-set withholding.
+
+    Picks the k most frequent NON-dominant (attack) classes. 'Normal' (or any
+    class containing 'normal'/'benign') is never withheld because removing normal
+    traffic from training would make open-set evaluation meaningless.
+
+    Returns (label_col, withheld_classes, class_counts Series).
+    """
+    df, label_col_found = _read_xiiotid_label(data_dir, label_col)
+    counts = df[label_col_found].value_counts()
+    attack_classes = [c for c in counts.index
+                      if not any(kw in str(c).lower() for kw in ('normal', 'benign', 'clean'))]
+    withheld = sorted(attack_classes, key=lambda c: -counts[c])[:k]
+    return label_col_found, withheld, counts
+
+
+def _locate_xiiotid_csv(data_dir: str) -> str:
+    """Find the X-IIoTID CSV under data_dir (handles nested download dirs)."""
+    if os.path.isfile(data_dir):
+        return data_dir
+    candidates = []
+    for root, _dirs, files in os.walk(data_dir):
+        for f in files:
+            if f.lower().endswith('.csv'):
+                candidates.append(os.path.join(root, f))
+    if not candidates:
+        raise FileNotFoundError(f"No CSV file found under {data_dir}")
+    # Prefer names that mention the dataset, else the largest CSV.
+    named = [c for c in candidates if 'x-iiotid' in os.path.basename(c).lower()
+             or 'xiiotid' in os.path.basename(c).lower()]
+    if named:
+        return max(named, key=os.path.getsize)
+    return max(candidates, key=os.path.getsize)
+
+
+def _read_xiiotid_label(data_dir: str, label_col: Optional[str] = None,
+                        nrows: Optional[int] = None) -> Tuple[pd.DataFrame, str]:
+    """Read just the label column(s); used for discovery and class listing."""
+    csv_path = _locate_xiiotid_csv(data_dir)
+    header = pd.read_csv(csv_path, nrows=0)
+    if label_col is None:
+        # Most granular label level, decided from the data.
+        ranked = rank_xiiotid_label_columns(csv_path, header.columns.tolist())
+        label_col = ranked[0][0]
+    df = pd.read_csv(csv_path, usecols=[label_col], nrows=nrows, low_memory=False)
+    return df, label_col
+
+
+def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
+                                 artifact_dir: str = 'results/baselines',
+                                 development_subset_path: Optional[str] = None,
+                                 withheld_classes: Optional[List[str]] = None,
+                                 open_set: bool = False,
+                                 scaler_save_dir: Optional[str] = None,
+                                 dataset_name: str = 'xiiotid',
+                                 label_col: Optional[str] = None,
+                                 max_rows: Optional[int] = None) -> Tuple:
+    """
+    X-IIoTset data loader with a true open-set protocol.
+
+    Protocol (matches CICIoT2023 / Edge-IIoTset):
+      1. Discover label column + drop leakage columns.
+      2. Stratified 70/15/15 split over ALL rows (unknown classes present in
+         val/test, absent from train).
+      3. Fit scaler on KNOWN TRAIN rows only; val/test transformed with it.
+      4. Withheld classes map to an explicit unknown index; never seen in train.
+
+    max_rows: optional cap (for quick smoke tests on huge files).
+    """
+    csv_path = _locate_xiiotid_csv(data_dir)
+    print(f"Loading X-IIoTID dataset from: {csv_path}")
+
+    # ---- discover schema ----
+    header = pd.read_csv(csv_path, nrows=0)
+    all_columns = header.columns.tolist()
+    ranked = rank_xiiotid_label_columns(csv_path, all_columns)
+    if label_col is None:
+        label_col = ranked[0][0]
+    elif label_col not in all_columns:
+        raise ValueError(f"Requested label column '{label_col}' not in dataset. "
+                         f"Available label columns: {[c for c, _ in ranked]}")
+    _, feature_cols, reasons = discover_xiiotid_columns(all_columns, label_col=label_col)
+
+    print("Label levels found (most -> least granular):")
+    for col, nun in ranked:
+        mark = "  <-- target" if col == label_col else ""
+        print(f"  {col:<16} {nun:>3} distinct{mark}")
+    print(f"Target label column: {label_col}")
+    print(f"Features before constant-column removal: {len(feature_cols)}")
+
+    # ---- read the label column to enumerate classes ----
+    label_series = pd.read_csv(csv_path, usecols=[label_col], low_memory=False)
+    if max_rows is not None:
+        label_series = label_series.iloc[:max_rows]
+    y_raw = label_series[label_col].astype(str).values
+    num_rows = len(y_raw)
+    print(f"Total rows: {num_rows}")
+
+    classes = sorted(np.unique(y_raw).tolist())
+    print(f"Found {len(classes)} classes: {classes}")
+
+    if withheld_classes is not None and len(withheld_classes) > 0:
+        missing = set(withheld_classes) - set(classes)
+        if missing:
+            raise ValueError(f"Withheld classes not present in dataset: {missing}")
+        withheld_set = set(withheld_classes)
+    else:
+        withheld_set = set()
+        open_set = False  # no withholding => closed set
+
+    known_list = [c for c in classes if c not in withheld_set]
+    label_to_int = {c: i for i, c in enumerate(known_list)}
+    unknown_class_index = len(known_list) if open_set else None
+    print(f"Known classes: {len(known_list)}, Withheld: {len(withheld_set)}")
+    if withheld_set:
+        print(f"Withheld (unknown): {sorted(withheld_set)}")
+
+    # Map every row to either a known int or the unknown int
+    y_int = np.full(num_rows, fill_value=(unknown_class_index if open_set else -1), dtype=np.int64)
+    for cls, idx in label_to_int.items():
+        y_int[y_raw == cls] = idx
+    if not open_set:
+        y_int[y_int == -1] = 0  # shouldn't happen, but guard
+
+    # ---- stratified 70/15/15 split ----
+    X_dummy = np.zeros((num_rows, 1), dtype=np.float32)
+    sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.15, random_state=42)
+    for train_val_idx, test_idx in sss1.split(X_dummy, y_raw):
+        pass
+    sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.15 / 0.85, random_state=42)
+    for train_rel, val_rel in sss2.split(X_dummy[train_val_idx], y_raw[train_val_idx]):
+        pass
+    train_indices = train_val_idx[train_rel]
+    val_indices = train_val_idx[val_rel]
+    test_indices = test_idx
+    print(f"Split sizes (raw): train {len(train_indices)}, val {len(val_indices)}, test {len(test_indices)}")
+
+    # Known-train mask: drop withheld rows from training entirely
+    is_known_train = np.zeros(num_rows, dtype=bool)
+    is_known_train[train_indices] = True
+    if open_set:
+        is_known_train &= (y_int != unknown_class_index)
+    known_train_count = int(is_known_train.sum())
+    print(f"Known training samples (after withholding): {known_train_count}")
+
+    split_of_row = np.full(num_rows, -1, dtype=np.int8)
+    split_of_row[train_indices] = 0
+    split_of_row[val_indices] = 1
+    split_of_row[test_indices] = 2
+
+    # ---- Pass 1: column stats on known-train rows only (chunked) ----
+    print("Pass 1: computing per-column stats on known-train rows...")
+    n_features = len(feature_cols)
+    col_sum = np.zeros(n_features, dtype=np.float64)
+    col_sumsq = np.zeros(n_features, dtype=np.float64)
+    col_min = np.full(n_features, np.inf, dtype=np.float64)
+    col_max = np.full(n_features, -np.inf, dtype=np.float64)
+    col_count = 0
+
+    chunksize = 100_000
+    offset = 0
+    for chunk in pd.read_csv(csv_path, usecols=feature_cols, chunksize=chunksize,
+                              nrows=max_rows, low_memory=False):
+        Xc = chunk.apply(pd.to_numeric, errors='coerce').fillna(0).to_numpy(dtype=np.float64)
+        end = offset + len(chunk)
+        mask = is_known_train[offset:end]
+        if np.any(mask):
+            Xk = Xc[mask]
+            col_sum += Xk.sum(axis=0)
+            col_sumsq += (Xk ** 2).sum(axis=0)
+            col_min = np.minimum(col_min, Xk.min(axis=0))
+            col_max = np.maximum(col_max, Xk.max(axis=0))
+            col_count += int(mask.sum())
+        offset = end
+
+    means = col_sum / max(col_count, 1)
+    var = np.maximum((col_sumsq - col_sum ** 2 / max(col_count, 1)) / max(col_count, 1), 0.0)
+    stds = np.sqrt(var)
+    constant_mask = (col_min == col_max)
+    constant_cols = [feature_cols[i] for i in range(n_features) if constant_mask[i]]
+    if constant_cols:
+        print(f"Constant columns in known-train (dropped): {constant_cols}")
+    keep_mask = ~constant_mask
+    final_features = [feature_cols[i] for i in range(n_features) if keep_mask[i]]
+    means_final = means[keep_mask]
+    stds_final = np.where(stds[keep_mask] == 0, 1.0, stds[keep_mask])
+    input_dim = len(final_features)
+    print(f"Final input dimension: {input_dim}")
+
+    # ---- Pass 2: write scaled memmaps (chunked, vectorized) ----
+    print("Pass 2: scaling and writing memmap arrays...")
+    processed_base = (scaler_save_dir.replace('results', 'processed')
+                      if scaler_save_dir else os.path.join('experiments', 'processed', 'xiiotid'))
+    os.makedirs(processed_base, exist_ok=True)
+
+    def _split_paths(base, split_name):
+        """(features_path, labels_path) for a split subdirectory."""
+        return (os.path.join(base, split_name, 'features.dat'),
+                os.path.join(base, split_name, 'labels.dat'))
+
+    def _open_memmap(split_name, n):
+        d = os.path.join(processed_base, split_name)
+        os.makedirs(d, exist_ok=True)
+        fp = os.path.join(d, 'features.dat')
+        lp = os.path.join(d, 'labels.dat')
+        for p in (fp, lp):
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        feats = np.memmap(fp, dtype='float32', mode='w+', shape=(n, input_dim))
+        labs = np.memmap(lp, dtype='int64', mode='w+', shape=(n,))
+        return feats, labs
+
+    # counts of what will actually be written per split
+    n_train_write = known_train_count
+    n_val_write = int((split_of_row == 1).sum())
+    n_test_write = int((split_of_row == 2).sum())
+    train_features, train_labels = _open_memmap('train', n_train_write)
+    val_features, val_labels = _open_memmap('validation', n_val_write)
+    test_features, test_labels = _open_memmap('test', n_test_write)
+
+    w_train = w_val = w_test = 0
+    offset = 0
+    for chunk in pd.read_csv(csv_path, usecols=feature_cols, chunksize=chunksize,
+                              nrows=max_rows, low_memory=False):
+        Xc = chunk.apply(pd.to_numeric, errors='coerce').fillna(0).to_numpy(dtype=np.float64)
+        end = offset + len(chunk)
+        splits = split_of_row[offset:end]
+        y_slice = y_int[offset:end]
+        Xc = (Xc[:, keep_mask] - means_final) / stds_final
+        Xc = np.clip(Xc, -5, 5).astype(np.float32)
+
+        # train: only known-train rows
+        m = (splits == 0) & is_known_train[offset:end]
+        if np.any(m):
+            train_features[w_train:w_train + int(m.sum())] = Xc[m]
+            train_labels[w_train:w_train + int(m.sum())] = y_slice[m]
+            w_train += int(m.sum())
+
+        m = splits == 1
+        if np.any(m):
+            val_features[w_val:w_val + int(m.sum())] = Xc[m]
+            val_labels[w_val:w_val + int(m.sum())] = y_slice[m]
+            w_val += int(m.sum())
+
+        m = splits == 2
+        if np.any(m):
+            test_features[w_test:w_test + int(m.sum())] = Xc[m]
+            test_labels[w_test:w_test + int(m.sum())] = y_slice[m]
+            w_test += int(m.sum())
+
+        offset = end
+
+    train_features.flush(); train_labels.flush()
+    val_features.flush(); val_labels.flush()
+    test_features.flush(); test_labels.flush()
+    print(f"Written: train {w_train}, val {w_val}, test {w_test}")
+
+    # ---- rebuild a fitted scaler object for downstream use ----
+    scaler = StandardScaler()
+    scaler.mean_ = means_final
+    scaler.scale_ = stds_final
+    scaler.var_ = stds_final ** 2
+    scaler.n_features_in_ = input_dim
+    scaler.n_samples_seen_ = col_count
+
+    train_dataset = MemmapDataset(*_split_paths(processed_base, 'train'),
+                                  w_train, input_dim,
+                                  unknown_class_index=unknown_class_index, label_mapping=label_to_int)
+    val_dataset = MemmapDataset(*_split_paths(processed_base, 'validation'),
+                                w_val, input_dim,
+                                unknown_class_index=unknown_class_index, label_mapping=label_to_int)
+    test_dataset = MemmapDataset(*_split_paths(processed_base, 'test'),
+                                 w_test, input_dim,
+                                 unknown_class_index=unknown_class_index, label_mapping=label_to_int)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                              num_workers=0, pin_memory=False)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
+                            num_workers=0, pin_memory=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
+                             num_workers=0, pin_memory=False)
+
+    num_classes = (len(known_list) + 1) if open_set else len(known_list)
+
+    # ---- split manifest: lets a sweep re-train without re-parsing the CSV ----
+    # Re-reading 355 MB of CSV for every hyper-parameter trial is the dominant
+    # cost of a sweep, and it is identical work every time because it depends
+    # only on (data, withheld classes, seed). Recording the shape here allows
+    # create_loaders_from_cache() to rebuild the loaders in milliseconds.
+    split_meta = {
+        'dataset': dataset_name,
+        'processed_dir': processed_base,
+        'csv_path': csv_path,
+        'label_column': label_col,
+        'input_dim': input_dim,
+        'retained_features': final_features,
+        'removed_columns': list(reasons.keys()) + constant_cols,
+        'withheld_classes': sorted(withheld_set) if open_set else [],
+        'known_classes': known_list,
+        'label_to_int': {c: int(i) for c, i in label_to_int.items()},
+        'unknown_class_index': unknown_class_index,
+        'open_set': bool(open_set),
+        'num_classes': num_classes,
+        'counts': {'train': w_train, 'validation': w_val, 'test': w_test},
+        'scaler_n_samples_seen': int(col_count),
+        'split_seed': 42,
+    }
+    with open(os.path.join(processed_base, 'split_meta.json'), 'w') as f:
+        json.dump(split_meta, f, indent=2)
+    print(f"Split manifest: {os.path.join(processed_base, 'split_meta.json')}")
+
+    # ---- persist artifacts ----
+    if scaler_save_dir is not None:
+        os.makedirs(scaler_save_dir, exist_ok=True)
+        joblib.dump(scaler, os.path.join(scaler_save_dir, f'{dataset_name}_preprocessor.joblib'))
+        manifest = {
+            'original_columns': all_columns,
+            'removed_columns': list(reasons.keys()) + constant_cols,
+            'retained_columns': final_features,
+            'removal_reasons': {**reasons,
+                                **{c: 'Constant column (single unique value in known-train)'
+                                   for c in constant_cols}},
+            'label_column': label_col,
+        }
+        with open(os.path.join(scaler_save_dir, f'{dataset_name}_feature_manifest.json'), 'w') as f:
+            json.dump(manifest, f, indent=2)
+        label_mapping = {
+            "multiclass": {"label_to_int": {c: int(i) for c, i in label_to_int.items()}},
+            "classes": known_list,
+            "withheld_classes": sorted(withheld_set) if open_set else [],
+            "unknown_class_index": unknown_class_index,
+        }
+        with open(os.path.join(scaler_save_dir, f'{dataset_name}_label_mapping.json'), 'w') as f:
+            json.dump(label_mapping, f, indent=2)
+        print(f"Saved scaler, manifest, and label mapping to {scaler_save_dir}")
+
+    return train_loader, val_loader, test_loader, num_classes, input_dim
+
+
+def create_loaders_from_cache(processed_dir: str, batch_size: int = 256,
+                              shuffle_train: bool = True) -> Tuple:
+    """
+    Rebuild train/val/test loaders from a processed split on disk.
+
+    Used by hyper-parameter sweeps: the expensive CSV parse and scaling depend
+    only on the dataset and the withheld-class set, so they are done once and
+    then reused for every trial. Returns the same tuple as create_data_loaders.
+    """
+    meta_path = os.path.join(processed_dir, 'split_meta.json')
+    if not os.path.isfile(meta_path):
+        raise FileNotFoundError(
+            f"{meta_path} not found. Run the loader once with "
+            f"scaler_save_dir set so the split manifest is written.")
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    input_dim = meta['input_dim']
+    counts = meta['counts']
+    unknown_idx = meta.get('unknown_class_index')
+    label_to_int = meta.get('label_to_int')
+
+    def _make(split, shuffle):
+        feats, labs = _split_paths(processed_dir, split)
+        if not os.path.isfile(feats):
+            raise FileNotFoundError(f"missing {feats}")
+        ds = MemmapDataset(feats, labs, counts[split], input_dim,
+                           unknown_class_index=unknown_idx, label_mapping=label_to_int)
+        return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
+                          num_workers=0, pin_memory=False)
+
+    loaders = (_make('train', shuffle_train), _make('validation', False),
+               _make('test', False))
+    return (*loaders, meta['num_classes'], input_dim)
+
+
 def create_data_loaders(data_dir: str, batch_size: int = 256,
                         artifact_dir: str = 'results/baselines',
                         development_subset_path: Optional[str] = None,
                         withheld_classes: Optional[list] = None,
                         open_set: bool = False,
                         scaler_save_dir: Optional[str] = None,
-                        dataset_type: str = 'ciciot2023'):
+                        dataset_type: str = 'ciciot2023',
+                        label_col: Optional[str] = None,
+                        max_rows: Optional[int] = None):
     """
     Create data loaders for training, validation, and test sets.
-    Handles both CICIoT2023 and Edge-IIoTset datasets.
+    Handles CICIoT2023, Edge-IIoTset and X-IIoTID datasets.
 
     Args:
         data_dir: Path to dataset directory (for CICIoT2023: base dir containing train/validation/test;
@@ -938,7 +1484,9 @@ def create_data_loaders(data_dir: str, batch_size: int = 256,
                           If None and dataset_type is 'edgeiiot', treated as no withholding (closed set) unless open_set True and withheld_classes provided.
         open_set: Whether to perform open-set processing (withhold classes before scaling)
         scaler_save_dir: Directory to save scaler and label mappings (if open_set)
-        dataset_type: Either 'ciciot2023' or 'edgeiiot' (default: 'ciciot2023')
+        dataset_type: 'ciciot2023', 'edgeiiot' or 'xiiotid' (default: 'ciciot2023')
+        label_col: (xiiotid only) force a specific target label column; auto-detected if None
+        max_rows: (xiiotid only) cap the number of CSV rows read, for fast smoke tests
 
     Returns:
         train_loader, val_loader, test_loader, num_classes, input_dim
@@ -985,8 +1533,22 @@ def create_data_loaders(data_dir: str, batch_size: int = 256,
             scaler_save_dir=scaler_save_dir,
             dataset_name='edgeiiot'
         )
+    elif dataset_type == 'xiiotid':
+        return _create_data_loaders_xiiotid(
+            data_dir=data_dir,
+            batch_size=batch_size,
+            artifact_dir=artifact_dir,
+            development_subset_path=development_subset_path,
+            withheld_classes=withheld_classes,
+            open_set=open_set,
+            scaler_save_dir=scaler_save_dir,
+            dataset_name='xiiotid',
+            label_col=label_col,
+            max_rows=max_rows,
+        )
     else:
-        raise ValueError(f"Unknown dataset_type: {dataset_type}. Supported: 'ciciot2023', 'edgeiiot'.")
+        raise ValueError(f"Unknown dataset_type: {dataset_type}. "
+                         "Supported: 'ciciot2023', 'edgeiiot', 'xiiotid'.")
 
 
 if __name__ == '__main__':

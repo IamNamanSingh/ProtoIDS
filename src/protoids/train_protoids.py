@@ -353,10 +353,14 @@ def main():
                        help='Path to pre-trained model for evaluation')
     parser.add_argument('--withhold_open_set', action='store_true',
                        help='Enable open-set processing (withhold classes from training)')
-    parser.add_argument('--dataset', type=str, choices=['ciciot2023', 'edgeiiot'], default='ciciot2023',
-                       help='Dataset to use: ciciot2023 or edgeiiot')
+    parser.add_argument('--dataset', type=str, choices=['ciciot2023', 'edgeiiot', 'xiiotid'], default='ciciot2023',
+                       help='Dataset to use: ciciot2023, edgeiiot or xiiotid')
     parser.add_argument('--withheld_classes', nargs='*', type=str, default=None,
                        help='List of class names to withhold from training (for open-set). If omitted, uses dataset-specific defaults when --withhold_open_set is set.')
+    parser.add_argument('--xiiotid_label_col', type=str, default=None,
+                       help='X-IIoTID only: force a target label column (default: auto-detect, prefers Sub-Category)')
+    parser.add_argument('--max_rows', type=int, default=None,
+                       help='X-IIoTID only: cap the number of CSV rows read (for fast smoke tests)')
     parser.add_argument('--ae_init', type=str, default='',
                        help='Path to ae_pretrain.pth for encoder init')
     parser.add_argument('--full_data', action='store_true',
@@ -388,11 +392,36 @@ def main():
                 withheld_names = ['MITM-ArpSpoofing', 'VulnerabilityScan', 'DictionaryBruteForce']
             else:
                 withheld_names = []  # no withholding
-    else:  # edgeiiot
+    elif args.dataset == 'edgeiiot':
         if args.withheld_classes is not None:
             withheld_names = args.withheld_classes
         else:
             withheld_names = []  # no withholding by default for Edge-IIoT
+    else:  # xiiotid
+        # X-IIoTID has many classes and the release varies between mirrors, so we
+        # do NOT hard-code a default. Without an explicit choice we inspect the
+        # data and suggest the most frequent attack classes (see
+        # suggest_xiiotid_withheld), keeping the choice visible and reviewable.
+        if args.withheld_classes is not None:
+            withheld_names = args.withheld_classes
+        else:
+            print("No --withheld_classes given for X-IIoTID.")
+            print("Suggesting withheld classes from the most frequent attack classes.")
+            from protoids.dataset import suggest_xiiotid_withheld
+            try:
+                _lc, _suggested, _counts = suggest_xiiotid_withheld(
+                    data_dir=os.environ.get('XIIOTID_DATA_DIR', 'datasets/xiiotid'),
+                    label_col=args.xiiotid_label_col,
+                    k=3,
+                )
+                print(f"Suggested withheld classes: {_suggested}")
+                print("Pass these explicitly with --withheld_classes to make the choice reproducible.")
+                withheld_names = _suggested
+            except Exception as exc:
+                print(f"Could not auto-suggest withheld classes ({exc}).")
+                print("Run the dataset inspection cell in colab/ProtoIDS_XIIoTID.ipynb, "
+                      "then re-run with --withheld_classes '<name1>' '<name2>' '<name3>'.")
+                sys.exit(1)
 
     # Paths
     if args.dataset == 'ciciot2023':
@@ -401,26 +430,21 @@ def main():
         development_subset_path = None if args.full_data else 'experiments/data/ciciot_dev.parquet'
         if args.full_data:
             print("Using FULL 5.5M train (CICIOT23/train/train.csv) – not dev parquet")
-    else:  # edgeiiot
-        # For Edge-IIoT, data_dir should point to the directory containing the CSV file.
-        # We'll rely on the user to set via an environment variable or modify here.
-        # For simplicity, we'll keep data_dir as a placeholder; the user must set it correctly.
-        # We'll add a note and expect the user to modify the script or set via symlink?
-        # Instead we will read from an environment variable or default to a known location.
-        # To avoid hardcoding, we will add a new argument --edgeiiot_data_dir but we cannot change the interface too much.
-        # Since the instruction says do not modify the final CICIoT2023 implementation behavior, we can add a new argument.
-        # However we already have --dataset; we can also add --edgeiiot_data_dir.
-        # But to keep changes minimal, we will assume the user sets data_dir appropriately via editing this script or setting a symlink.
-        # We'll output an error if not set.
-        # We'll read from environment variable EDGEIIOT_DATA_DIR, else default to a placeholder.
-        import os
+    elif args.dataset == 'edgeiiot':
+        # data_dir must point at the directory holding the Edge-IIoT CSV.
         data_dir = os.environ.get('EDGEIIOT_DATA_DIR', '')
         if not data_dir:
-            print("ERROR: For Edge-IIoT dataset, please set environment variable EDGEIIOT_DATA_DIR to the directory containing the CSV file.")
+            print("ERROR: For Edge-IIoT dataset, set EDGEIIOT_DATA_DIR to the directory containing the CSV file.")
             sys.exit(1)
-        artifact_dir = 'results/baselines'  # still use same artifact dir for scalers etc.
-        development_subset_path = None  # Edge-IIoT does not use development subset in this implementation
+        artifact_dir = 'results/baselines'
+        development_subset_path = None  # Edge-IIoT does not use development subset
         print(f"Using Edge-IIoT dataset from directory: {data_dir}")
+    else:  # xiiotid
+        # The downloader (src/data/download_xiiotid.py) drops the CSV here.
+        data_dir = os.environ.get('XIIOTID_DATA_DIR', 'datasets/xiiotid')
+        artifact_dir = 'results/baselines'
+        development_subset_path = None  # X-IIoTID is processed end-to-end, no dev subset
+        print(f"Using X-IIoTID dataset from directory: {data_dir}")
 
     model_save_dir = f'experiments/models/{args.experiment_name}'
     results_save_dir = f'experiments/results/{args.experiment_name}'
@@ -446,7 +470,9 @@ def main():
         withheld_classes=withheld_names,  # pass list of strings (or None)
         open_set=open_set,
         scaler_save_dir=scaler_save_dir,
-        dataset_type=args.dataset
+        dataset_type=args.dataset,
+        label_col=args.xiiotid_label_col,
+        max_rows=args.max_rows,
     )
     load_end = time.time()
     print(f"Data loading took {load_end - load_start:.2f} seconds.")
@@ -664,34 +690,39 @@ def main():
         with open(label_mapping_path, 'r') as f:
             label_mapping = json.load(f)
     else:
-        # Edge IIoT: label mapping saved in scaler_save_dir if open set and scaler_save_dir set
+        # Edge-IIoT / X-IIoTID: label mapping is written by the loader into scaler_save_dir
         if scaler_save_dir is not None:
             label_mapping_path = os.path.join(scaler_save_dir, f'{args.dataset}_label_mapping.json')
             if os.path.exists(label_mapping_path):
                 with open(label_mapping_path, 'r') as f:
                     label_mapping = json.load(f)
             else:
-                print("WARNING: Label mapping not found for Edge-IIoT; cannot compute withheld class indices for open-set evaluation.")
+                print(f"WARNING: {label_mapping_path} not found; cannot report withheld class indices.")
         else:
-            print("WARNING: No scaler_save_dir; cannot load label mapping for Edge-IIoT.")
+            print("WARNING: No scaler_save_dir; cannot load label mapping.")
 
     if label_mapping is not None:
         int_to_label = {v: k for k, v in label_mapping['multiclass']['label_to_int'].items()}
         label_to_int_map = label_mapping['multiclass']['label_to_int']
-        # Only consider withheld classes that exist in the mapping
-        withheld_class_indices = [
-            label_to_int_map[cls] for cls in withheld_class_names if cls in label_to_int_map
-        ]
-        print(f"Withheld class indices: {withheld_class_indices}")
-        print(f"Withheld class names: {[int_to_label[idx] for idx in withheld_class_indices if idx in int_to_label]}")
+        # Withheld classes are absent from the known-class mapping BY DESIGN, so
+        # report them by name and point at the reserved unknown slot instead of
+        # printing an empty index list.
+        mapped = {cls: label_to_int_map[cls] for cls in withheld_class_names
+                  if cls in label_to_int_map}
+        print(f"Withheld class names : {sorted(withheld_class_names)}")
+        if open_set:
+            print(f"Withheld classes have no class index (never trained); they are "
+                  f"collapsed onto the reserved unknown index "
+                  f"{model.unknown_class_index} at evaluation time.")
+        withheld_class_indices = sorted(mapped.values())
     else:
         withheld_class_indices = []
 
-    # Note: For a proper open-set evaluation, we would need to retrain the model
-    # without the withheld classes. However, as per instructions, we'll:
-    # 1. Use the model trained on all classes (or load pre-trained)
-    # 2. For open-set evaluation, we'll treat the withheld classes as unknown during evaluation
-    # 3. We'll use only known-class validation samples for threshold calibration
+    # Note: with the true open-set loaders the model IS trained without the
+    # withheld classes - they were already removed before the scaler was fitted
+    # and before any prototype was learned. Here we only need to separate the
+    # already-processed validation rows into known / unknown, and calibrate the
+    # threshold on known validation rows alone.
 
     # Create datasets for open-set evaluation
     # Known data: validation set excluding withheld classes
