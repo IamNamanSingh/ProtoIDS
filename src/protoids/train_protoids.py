@@ -361,6 +361,18 @@ def main():
                        help='X-IIoTID only: force a target label column (default: auto-detect, prefers Sub-Category)')
     parser.add_argument('--max_rows', type=int, default=None,
                        help='X-IIoTID only: cap the number of CSV rows read (for fast smoke tests)')
+    parser.add_argument('--split_strategy', type=str, default='random',
+                       choices=['random', 'temporal'],
+                       help='X-IIoTID only: stratified random split, or contiguous '
+                            'time blocks (earliest->train, latest->test). Temporal is '
+                            'the honest generalisation test for a deployed IDS.')
+    parser.add_argument('--xiiotid_time_col', type=str, default=None,
+                       help='X-IIoTID only: time column for --split_strategy temporal '
+                            '(default: Timestamp, else Date)')
+    parser.add_argument('--train_frac', type=float, default=0.70,
+                       help='X-IIoTID temporal split: fraction of rows used for training')
+    parser.add_argument('--val_frac', type=float, default=0.15,
+                       help='X-IIoTID temporal split: fraction of rows used for validation')
     parser.add_argument('--ae_init', type=str, default='',
                        help='Path to ae_pretrain.pth for encoder init')
     parser.add_argument('--full_data', action='store_true',
@@ -473,6 +485,10 @@ def main():
         dataset_type=args.dataset,
         label_col=args.xiiotid_label_col,
         max_rows=args.max_rows,
+        split_strategy=args.split_strategy,
+        time_col=args.xiiotid_time_col,
+        train_frac=args.train_frac,
+        val_frac=args.val_frac,
     )
     load_end = time.time()
     print(f"Data loading took {load_end - load_start:.2f} seconds.")

@@ -1138,7 +1138,11 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
                                  scaler_save_dir: Optional[str] = None,
                                  dataset_name: str = 'xiiotid',
                                  label_col: Optional[str] = None,
-                                 max_rows: Optional[int] = None) -> Tuple:
+                                 max_rows: Optional[int] = None,
+                                 split_strategy: str = 'random',
+                                 time_col: Optional[str] = None,
+                                 train_frac: float = 0.70,
+                                 val_frac: float = 0.15) -> Tuple:
     """
     X-IIoTset data loader with a true open-set protocol.
 
@@ -1206,17 +1210,78 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
     if not open_set:
         y_int[y_int == -1] = 0  # shouldn't happen, but guard
 
-    # ---- stratified 70/15/15 split ----
-    X_dummy = np.zeros((num_rows, 1), dtype=np.float32)
-    sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.15, random_state=42)
-    for train_val_idx, test_idx in sss1.split(X_dummy, y_raw):
-        pass
-    sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.15 / 0.85, random_state=42)
-    for train_rel, val_rel in sss2.split(X_dummy[train_val_idx], y_raw[train_val_idx]):
-        pass
-    train_indices = train_val_idx[train_rel]
-    val_indices = train_val_idx[val_rel]
-    test_indices = test_idx
+    # ---- split ----
+    # 'random'  stratified 70/15/15 (fast to iterate, but time-adjacent flows end
+    #           up on both sides of the boundary, so it flatters the model)
+    # 'temporal' contiguous time blocks, earliest -> train, latest -> test. This
+    #           is the honest generalisation test for an IDS: the model must
+    #           handle traffic it has never seen in time, which is what actually
+    #           happens in deployment. X-IIoTID spans 303 days and the class mix
+    #           drifts heavily over that window, so the two splits are not
+    #           interchangeable.
+    if split_strategy == 'random':
+        X_dummy = np.zeros((num_rows, 1), dtype=np.float32)
+        sss1 = StratifiedShuffleSplit(n_splits=1, test_size=val_frac, random_state=42)
+        for train_val_idx, test_idx in sss1.split(X_dummy, y_raw):
+            pass
+        sss2 = StratifiedShuffleSplit(
+            n_splits=1, test_size=val_frac / (1.0 - val_frac), random_state=42)
+        for train_rel, val_rel in sss2.split(X_dummy[train_val_idx],
+                                             y_raw[train_val_idx]):
+            pass
+        train_indices = train_val_idx[train_rel]
+        val_indices = train_val_idx[val_rel]
+        test_indices = test_idx
+    elif split_strategy == 'temporal':
+        if time_col is None:
+            time_col = 'Timestamp' if 'Timestamp' in all_columns else 'Date'
+        if time_col not in all_columns:
+            raise ValueError(
+                f"split_strategy='temporal' needs a time column; {time_col!r} "
+                f"not in {all_columns}. Pass --xiiotid_time_col.")
+        tvals = pd.read_csv(csv_path, usecols=[time_col], nrows=max_rows,
+                            low_memory=False)[time_col]
+        if max_rows is not None:
+            tvals = tvals.iloc[:max_rows]
+        tnum = pd.to_numeric(tvals, errors='coerce')
+        if tnum.notna().sum() < len(tnum) * 0.5:
+            parsed = pd.to_datetime(tvals, errors='coerce', format='mixed')
+            tnum = parsed.astype('int64', errors='coerce') / 1e9
+        # X-IIoTID has a few hundred rows whose Timestamp is not numeric (the
+        # column is inferred as mixed type, so some values arrive as the strings
+        # "TRUE"/"FALSE"). They are imputed with the median timestamp rather than
+        # dropped, because every downstream array is indexed by absolute CSV row
+        # position and removing rows here would silently misalign them. The count
+        # is reported rather than hidden.
+        bad = tnum.isna()
+        if bad.any():
+            n_bad = int(bad.sum())
+            print(f"  NOTE: {n_bad} rows ({100 * n_bad / len(tnum):.3f}%) have an "
+                  f"unparseable {time_col!r}; imputed with the median timestamp")
+            tnum = tnum.fillna(tnum.median())
+        order = np.argsort(tnum.to_numpy(), kind='stable')
+        n = len(order)
+        n_train = int(round(train_frac * n))
+        n_val = int(round(val_frac * n))
+        train_indices = order[:n_train]
+        val_indices = order[n_train:n_train + n_val]
+        test_indices = order[n_train + n_val:]
+        print(f"temporal split on {time_col!r}: "
+              f"train {pd.to_datetime(tnum.iloc[train_indices].min(), unit='s').date()} .. "
+              f"{pd.to_datetime(tnum.iloc[train_indices].max(), unit='s').date()}")
+        print(f"  val   {pd.to_datetime(tnum.iloc[val_indices].min(), unit='s').date()} .. "
+              f"{pd.to_datetime(tnum.iloc[val_indices].max(), unit='s').date()}")
+        print(f"  test  {pd.to_datetime(tnum.iloc[test_indices].min(), unit='s').date()} .. "
+              f"{pd.to_datetime(tnum.iloc[test_indices].max(), unit='s').date()}")
+        for nm, idx in (('train', train_indices), ('val', val_indices),
+                        ('test', test_indices)):
+            seen = len(set(y_raw[idx]))
+            unk = len(withheld_set & set(y_raw[idx]))
+            print(f"  {nm:<6} {len(idx):>7} rows  {seen:>3} classes  "
+                  f"(withheld present: {unk})")
+    else:
+        raise ValueError(f"split_strategy must be 'random' or 'temporal', "
+                         f"got {split_strategy!r}")
     print(f"Split sizes (raw): train {len(train_indices)}, val {len(val_indices)}, test {len(test_indices)}")
 
     # Known-train mask: drop withheld rows from training entirely
@@ -1383,6 +1448,10 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
         'unknown_class_index': unknown_class_index,
         'open_set': bool(open_set),
         'num_classes': num_classes,
+        'split_strategy': split_strategy,
+        'time_col': time_col if split_strategy == 'temporal' else None,
+        'train_frac': train_frac if split_strategy == 'temporal' else None,
+        'val_frac': val_frac if split_strategy == 'temporal' else None,
         'counts': {'train': w_train, 'validation': w_val, 'test': w_test},
         'scaler_n_samples_seen': int(col_count),
         'split_seed': 42,
@@ -1469,7 +1538,11 @@ def create_data_loaders(data_dir: str, batch_size: int = 256,
                         scaler_save_dir: Optional[str] = None,
                         dataset_type: str = 'ciciot2023',
                         label_col: Optional[str] = None,
-                        max_rows: Optional[int] = None):
+                        max_rows: Optional[int] = None,
+                        split_strategy: str = 'random',
+                        time_col: Optional[str] = None,
+                        train_frac: float = 0.70,
+                        val_frac: float = 0.15):
     """
     Create data loaders for training, validation, and test sets.
     Handles CICIoT2023, Edge-IIoTset and X-IIoTID datasets.
@@ -1488,6 +1561,9 @@ def create_data_loaders(data_dir: str, batch_size: int = 256,
         dataset_type: 'ciciot2023', 'edgeiiot' or 'xiiotid' (default: 'ciciot2023')
         label_col: (xiiotid only) force a specific target label column; auto-detected if None
         max_rows: (xiiotid only) cap the number of CSV rows read, for fast smoke tests
+        split_strategy: (xiiotid only) 'random' stratified, or 'temporal' contiguous
+                        time blocks (earliest->train, latest->test)
+        time_col / train_frac / val_frac: (xiiotid only) temporal split controls
 
     Returns:
         train_loader, val_loader, test_loader, num_classes, input_dim
@@ -1546,6 +1622,10 @@ def create_data_loaders(data_dir: str, batch_size: int = 256,
             dataset_name='xiiotid',
             label_col=label_col,
             max_rows=max_rows,
+            split_strategy=split_strategy,
+            time_col=time_col,
+            train_frac=train_frac,
+            val_frac=val_frac,
         )
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}. "
