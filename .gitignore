@@ -82,3 +82,19 @@ memmap/
 CICIOT23/
 Kaggle/
 Colab/
+
+# Raw and preprocessed dataset files (X-IIoTID, CICIoT2023, Edge-IIoTset).
+# These are hundreds of MB and are re-obtained with src/data/download_xiiotid.py.
+datasets/
+*.csv
+*.parquet
+
+# Memmap arrays written by the dataset loaders (features.dat / labels.dat)
+*.dat
+experiments/processed/
+
+# Colab / local-runtime working dirs and exported artifacts
+content/
+artifacts/
+.ipynb_checkpoints/
+tests/_smoke_*/
