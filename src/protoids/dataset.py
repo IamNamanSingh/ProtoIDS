@@ -1277,11 +1277,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
                       if scaler_save_dir else os.path.join('experiments', 'processed', 'xiiotid'))
     os.makedirs(processed_base, exist_ok=True)
 
-    def _split_paths(base, split_name):
-        """(features_path, labels_path) for a split subdirectory."""
-        return (os.path.join(base, split_name, 'features.dat'),
-                os.path.join(base, split_name, 'labels.dat'))
-
     def _open_memmap(split_name, n):
         d = os.path.join(processed_base, split_name)
         os.makedirs(d, exist_ok=True)
@@ -1422,6 +1417,12 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
         print(f"Saved scaler, manifest, and label mapping to {scaler_save_dir}")
 
     return train_loader, val_loader, test_loader, num_classes, input_dim
+
+
+def _split_paths(base, split_name):
+    """(features_path, labels_path) for a processed split subdirectory."""
+    return (os.path.join(base, split_name, 'features.dat'),
+            os.path.join(base, split_name, 'labels.dat'))
 
 
 def create_loaders_from_cache(processed_dir: str, batch_size: int = 256,
