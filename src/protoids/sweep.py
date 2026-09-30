@@ -117,18 +117,35 @@ class _ResidentView:
 
 @torch.no_grad()
 def _distances(model, loader, device):
-    """Nearest-prototype cosine distance and the argmin class for every row."""
+    """
+    Per-class nearest-prototype distance and the predicted class for every row.
+
+    The prediction must be an argmin over CLASSES, not over prototypes: with
+    K > 1 the prototype tensor has num_known_classes * K rows, so reducing over
+    it directly yields prototype indices (e.g. 33 when only 16 classes exist)
+    and every accuracy figure silently collapses. model.forward already
+    reduces per class and reserves a large distance for the unknown slot, so we
+    use that. The reported distance is the nearest KNOWN class, because that is
+    what the threshold is compared against.
+    """
     model.eval()
     dists, preds, labels = [], [], []
-    protos = model.prototype_layer.prototypes
     for xb, yb in loader:
         xb = xb.to(device, non_blocking=True)
-        out = model.encoder(xb)
-        emb = out[1] if isinstance(out, tuple) else out
-        d = torch.cdist(emb, protos)
-        min_d, arg = d.min(dim=1)
-        dists.append(min_d.detach().cpu().numpy())
-        preds.append(arg.detach().cpu().numpy())
+        _emb, _norm, _dists, per_class = model(xb)
+        if per_class.shape[1] != model.num_classes:
+            raise RuntimeError(
+                f"per-class distance tensor has {per_class.shape[1]} columns "
+                f"but the model has {model.num_classes} classes")
+        pred = per_class.argmin(dim=1)
+        if model.unknown_class_index is not None:
+            known = per_class.clone()
+            known[:, model.unknown_class_index] = float('inf')
+            d = known.min(dim=1).values
+        else:
+            d = per_class.min(dim=1).values
+        dists.append(d.detach().cpu().numpy())
+        preds.append(pred.detach().cpu().numpy())
         labels.append(yb.detach().cpu().numpy())
     return (np.concatenate(dists), np.concatenate(preds), np.concatenate(labels))
 
@@ -395,6 +412,20 @@ def main():
         r['objective'] = score(r, weights)
         results.append(r)
         print(f"  objective = {r['objective']:.4f}\n", flush=True)
+
+    # Predicted labels must be class indices. If any trial produced prototype
+    # indices instead, every accuracy in this sweep is meaningless, so refuse to
+    # rank rather than report a number that looks plausible.
+    max_class = meta['num_classes'] - 1
+    for r in results:
+        # unknown_detection_rate and known_accuracy are only meaningful if the
+        # label space is right; a K>1 run that collapsed will show up here.
+        v = r['validation']
+        if v['known_accuracy'] < 0.05 and r['config']['num_prototypes'] > 1:
+            raise RuntimeError(
+                f"{r['name']}: known accuracy {v['known_accuracy']:.4f} is "
+                f"implausible for K>1. This indicates a class/prototype index "
+                f"mismatch rather than a real result; refusing to rank.")
 
     results.sort(key=lambda r: -r['objective'])
     print("\n=== ranked (validation only) ===")
