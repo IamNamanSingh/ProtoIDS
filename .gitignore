@@ -1,15 +1,100 @@
-CICIOT23/
-CICIOT23.zip
-DNN-EdgeIIoT-dataset.csv/
-DNN-EdgeIIoT-dataset.csv(1).zip
-*.csv
-*.zip
-experiments/models/
-experiments/results/
-.venv/
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+#  Usually these files are written by a pyinstaller-installation
+#  because PyInstaller writes a temporary exe file to debug/garbage
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
 .env
-.claude/
-.gemini/
-.basemem.code.db
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+# Thumbnails
+.DS_Store
+# Thumbs.db (Windows)
+Thumbs.db
+
+# Added for ProtoIDS artifact and data ignoring
+backups/
+datasets/
+*.pth
+*.pt
+*.ckpt
+*.npy
+*.npz
+memmap/
+CICIOT23/
+Kaggle/
+Colab/
+
+# Raw and preprocessed dataset files (X-IIoTID, CICIoT2023, Edge-IIoTset).
+# These are hundreds of MB and are re-obtained with src/data/download_xiiotid.py.
+datasets/
+*.csv
+*.parquet
+
+# Memmap arrays written by the dataset loaders (features.dat / labels.dat)
+*.dat
+experiments/processed/
+
+# Colab / local-runtime working dirs and exported artifacts
+content/
+artifacts/
+.ipynb_checkpoints/
+tests/_smoke_*/

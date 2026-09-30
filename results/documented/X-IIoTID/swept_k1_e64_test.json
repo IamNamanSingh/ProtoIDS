@@ -1,0 +1,61 @@
+{
+  "dataset": "X-IIoTID",
+  "label_column": "class1",
+  "withheld_classes": [
+    "Dictionary",
+    "Reverse_shell",
+    "Scanning_vulnerability"
+  ],
+  "known_classes": 16,
+  "input_features": 52,
+  "rows": {
+    "train": 535075,
+    "validation": 123125,
+    "test": 123126
+  },
+  "config": {
+    "embedding_dim": 64,
+    "num_prototypes": 1,
+    "dropout_rate": 0.2,
+    "learning_rate": 0.001,
+    "lambda_compact": 0.1,
+    "epochs": 10,
+    "threshold_percentile": 90.0,
+    "seed": 42,
+    "name": "k1_lam0.1_e64"
+  },
+  "selection": "best objective on VALIDATION; test scored once with the frozen validation threshold",
+  "objective_weights": {
+    "known_accuracy": 0.4,
+    "unknown_f1": 0.4,
+    "auroc": 0.2
+  },
+  "validation": {
+    "known_accuracy": 0.977088584411167,
+    "unknown_detection_rate": 0.7694306638317978,
+    "true_far_unknown_accepted": 0.23056933616820222,
+    "open_set_far_known_rejected": 0.1000008721513357,
+    "unknown_f1": 0.49262648415639415,
+    "threshold": 0.060161519795656204,
+    "n_known": 114659,
+    "n_unknown": 8466,
+    "auroc": 0.9217158635120205,
+    "aupr": 0.5387290332053889,
+    "mean_known_dist": 0.02050153724849224,
+    "mean_unknown_dist": 0.11547071486711502,
+    "final_train_loss": 0.07685862994333707,
+    "final_val_accuracy": 0.9099045395851135
+  },
+  "test": {
+    "known_accuracy": 0.9771934414791558,
+    "unknown_detection_rate": 0.7833687691944248,
+    "true_far_unknown_accepted": 0.21663123080557525,
+    "open_set_far_known_rejected": 0.10020931449502878,
+    "unknown_f1": 0.49887167143072064,
+    "threshold": 0.060161519795656204,
+    "n_known": 114660,
+    "n_unknown": 8466,
+    "auroc": 0.9244502589420074,
+    "aupr": 0.5524540653500153
+  }
+}

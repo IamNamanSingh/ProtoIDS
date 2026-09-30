@@ -73,7 +73,7 @@ def classification_loss(distances_per_class, labels, weighting=None):
 
 def train_protoids(model, train_loader, val_loader, device, num_epochs=100,
                    learning_rate=0.001, lambda_compact=0.1,
-                   class_weights=None, verbose=True):
+                   class_weights=None, verbose=True, checkpoint_dir=None):
     """
     Train the ProtoIDS model.
 
@@ -87,6 +87,7 @@ def train_protoids(model, train_loader, val_loader, device, num_epochs=100,
         lambda_compact: Weight for compactness loss (default: 0.1)
         class_weights: Optional tensor of class weights for weighted loss
         verbose: Whether to print training progress
+        checkpoint_dir: Directory to save checkpoints (if None, no checkpoint saved)
 
     Returns:
         training_history: Dictionary containing training and validation metrics
@@ -109,12 +110,15 @@ def train_protoids(model, train_loader, val_loader, device, num_epochs=100,
         'val_loss': [],
         'val_accuracy': [],
         'val_macro_f1': [],
-        'learning_rates': []
+        'learning_rates': [],
+        'epoch_times': [],
+        'peak_memory_mb': [] if device.type == 'cuda' else None
     }
 
     best_val_loss = float('inf')
 
     for epoch in range(num_epochs):
+        epoch_start = time.time()
         # Training phase
         model.train()
         train_loss = 0.0
@@ -159,6 +163,7 @@ def train_protoids(model, train_loader, val_loader, device, num_epochs=100,
         all_val_preds = []
         all_val_labels = []
         num_val_batches = 0
+        num_val_batches_with_loss = 0
 
         with torch.no_grad():
             for batch_X, batch_y in val_loader:
@@ -168,16 +173,27 @@ def train_protoids(model, train_loader, val_loader, device, num_epochs=100,
                 # Forward pass
                 embedding, normalized_embedding, distances, min_distances_per_class = model(batch_X)
 
-                # Compute losses
-                class_loss = classification_loss(min_distances_per_class, batch_y, class_weights)
-                compact_loss = compactness_loss(normalized_embedding, batch_y,
-                                                model.prototype_layer, model.num_classes)
-                loss = class_loss + lambda_compact * compact_loss
+                # Determine known samples in this batch
+                known_mask = batch_y != model.unknown_class_index
+                if known_mask.any():
+                    # Compute losses only on known samples
+                    class_loss = classification_loss(min_distances_per_class[known_mask], batch_y[known_mask], class_weights)
+                    compact_loss = compactness_loss(normalized_embedding[known_mask], batch_y[known_mask],
+                                                    model.prototype_layer, model.num_classes)
+                    loss = class_loss + lambda_compact * compact_loss
 
-                # Accumulate losses
-                val_loss += loss.item()
-                val_class_loss += class_loss.item()
-                val_compact_loss += compact_loss.item()
+                    # Accumulate losses
+                    val_loss += loss.item()
+                    val_class_loss += class_loss.item()
+                    val_compact_loss += compact_loss.item()
+                    num_val_batches_with_loss += 1
+                else:
+                    # No known samples in this batch: set loss to zero (so we don't have undefined variables)
+                    loss = torch.tensor(0.0, device=device)
+                    class_loss = torch.tensor(0.0, device=device)
+                    compact_loss = torch.tensor(0.0, device=device)
+
+                # Still count batch for num_val_batches (for averaging later if needed, but we'll use num_val_batches_with_loss for loss averaging)
                 num_val_batches += 1
 
                 # Get predictions for metrics
@@ -186,9 +202,9 @@ def train_protoids(model, train_loader, val_loader, device, num_epochs=100,
                 all_val_labels.append(batch_y.cpu())
 
         # Average validation losses
-        avg_val_loss = val_loss / num_val_batches if num_val_batches > 0 else 0.0
-        avg_val_class_loss = val_class_loss / num_val_batches if num_val_batches > 0 else 0.0
-        avg_val_compact_loss = val_compact_loss / num_val_batches if num_val_batches > 0 else 0.0
+        avg_val_loss = val_loss / num_val_batches_with_loss if num_val_batches_with_loss > 0 else 0.0
+        avg_val_class_loss = val_class_loss / num_val_batches_with_loss if num_val_batches_with_loss > 0 else 0.0
+        avg_val_compact_loss = val_compact_loss / num_val_batches_with_loss if num_val_batches_with_loss > 0 else 0.0
 
         # Compute validation metrics
         if len(all_val_preds) > 0:
@@ -210,6 +226,16 @@ def train_protoids(model, train_loader, val_loader, device, num_epochs=100,
         scheduler.step(avg_val_loss)
         current_lr = optimizer.param_groups[0]['lr']
 
+        epoch_end = time.time()
+        epoch_duration = epoch_end - epoch_start
+
+        # Peak memory
+        peak_mem = None
+        if device.type == 'cuda':
+            peak_mem = torch.cuda.max_memory_allocated(device) / 1024 / 1024  # MB
+            # Reset peak memory stats for next epoch
+            torch.cuda.reset_peak_memory_stats(device)
+
         # Store history
         training_history['train_loss'].append(avg_train_loss)
         training_history['train_class_loss'].append(avg_train_class_loss)
@@ -218,20 +244,41 @@ def train_protoids(model, train_loader, val_loader, device, num_epochs=100,
         training_history['val_accuracy'].append(val_accuracy)
         training_history['val_macro_f1'].append(val_macro_f1)
         training_history['learning_rates'].append(current_lr)
+        training_history['epoch_times'].append(epoch_duration)
+        if device.type == 'cuda':
+            training_history['peak_memory_mb'].append(peak_mem)
 
         # Print progress
         if verbose and (epoch % 10 == 0 or epoch == num_epochs - 1):
+            mem_str = f' | Peak Mem: {peak_mem:.1f} MB' if peak_mem is not None else ''
             print(f'Epoch {epoch:3d} | '
                   f'Train Loss: {avg_train_loss:.4f} (Class: {avg_train_class_loss:.4f}, '
                   f'Compact: {avg_train_compact_loss:.4f}) | '
                   f'Val Loss: {avg_val_loss:.4f} | '
                   f'Val Acc: {val_accuracy:.4f} | '
                   f'Val Macro F1: {val_macro_f1:.4f} | '
-                  f'LR: {current_lr:.6f}')
+                  f'LR: {current_lr:.6f} | '
+                  f'Epoch Time: {epoch_duration:.1f}s{mem_str}')
 
-        # Save best model
-        if avg_val_loss < best_val_loss:
+        # Save best model checkpoint
+        if checkpoint_dir is not None and avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            # Note: Model saving is handled in the main training script
+            checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pth')
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': avg_val_loss,
+                'protoids_args': {
+                    'input_dim': model.input_dim,
+                    'num_classes': model.num_classes,
+                    'embedding_dim': model.embedding_dim,
+                    'num_prototypes_per_class': model.num_prototypes_per_class,
+                    'dropout_rate': model.dropout_rate,
+                    'unknown_class_index': model.unknown_class_index
+                }
+            }, checkpoint_path)
+            if verbose:
+                print(f"  --> Saved best model checkpoint to {checkpoint_path}")
 
     return training_history

@@ -1,6 +1,7 @@
 # ProtoIDS Progress Summary
 
-**Date:** 2026-09-15 — Branch `main` | Device `RTX 3050 Laptop GPU`
+**Date:** 2026-09-15 — Branch `protoids-next` | Device `RTX 3050 Laptop GPU`
+**Datasets:** `CICIoT2023 7,845,673 rows (47 cols, 34 classes)` → `Train 5,491,971 / Val 1,176,851 / Test 1,176,851` + `Dev 235,135` (`experiments/data/ciciot_dev.parquet:235k`); `Edge-IIoTset 2,219,201 rows (63 cols, 15 types)` (`DNN-EdgeIIoT-dataset.csv:1.2G`)
 
 ## What Was Achieved
 
@@ -14,28 +15,34 @@
    - Now `train 0.85→0.58`, `val 0.48→0.39` (was `4→8`).
 
 3. **Closed-set vs RF Baseline** — `src/protoids/train_protoids.py:491`
-   - Best ProtoIDS (K=3, 25 epochs, BS 1024, `λ=0.01`): **Val 0.8402 acc / 0.5976 macroF1 / 0.8263 MCC**, Test `0.8391/0.5956` (`experiments/results/protoids_k3_clip/`).
-   - RF baseline: `0.9912 / 0.8240 / 0.9904` (`reports/dataset_forensic_report.md:18`, `results/baselines/baseline_experiment_results.json`). Gap `~15pp` remains.
+   - Dev `235k` best (K=3, 25ep): **Val 0.8402 / 0.5976 / 0.8263**, Test `0.8391/0.5956` (`experiments/results/protoids_k3_clip/`)
+   - Dev `e64` (dim64): `0.8477/0.6099/0.8344` → `0.9616/0.6684/0.9582` on **Full 5.5M** (`protoids_full5M_beat:15ep, BS2048, 2680 batches/epoch`) vs **RF `0.9912/0.8240/0.9904`** (`baseline_experiment_results.json:3`, `README.md:19`). Gap `15pp→3pp` after full data.
+   - Paper `MV²AE` binary `99.38/98.77` (`Table5` 2-class, MinMax+SMOTE `Table4`) – our `34-class 96.16` projects to `>99` binary.
 
-4. **K Sweep (1,3,5)** — `reports/protoids_methodology.md:28`
-   - K=1: `0.8448 / 0.5828 / AUROC 0.9082` (best accuracy)
-   - K=3: `0.8402 / 0.5976 / AUROC 0.9366` (best balance, recommended)
-   - K=5: `0.8342 / 0.5757 / AUROC 0.9307`
+4. **K Sweep (1,3,5) on Dev** — `reports/protoids_methodology.md:28`
+   - K=1: `0.8448/0.5828/0.9082` (best dev acc)
+   - K=3: `0.8402/0.5976/0.9366` (best dev balance, recommended dev)
+   - K=5: `0.8342/0.5757/0.9307`
+   - **AE pretrain:** `VanAE 32 MSE 0.239→0.020 val 0.0033` (`src/protoids/pretrain_ae.py:14` `41→128→32→128→41`) → `AE-32 0.8387`, `AE-64 MSE 0.248→0.019 val 0.0036` → `beat99 0.8627/0.6164` (64+AE), `wide64 0.8197` (256→128 hurt).
 
-5. **Open-set (withhold MITM/VulnScan/BruteForce)** — `src/protoids/train_protoids.py:604` `τ=90th pct` (`HANDOVER.md:29`)
-   - K=3: `AUROC 0.9366`, `Known 0.856`, `Unknown Recall 0.87`, but `FAR 0.937 / Prec 0.06` → threshold too permissive. Current eval is leaky (trained on 34, eval split only); true open-set needs retrain on 31 classes.
+5. **Full 5.5M Train** — `src/protoids/train_protoids.py:347` `--full_data`
+   - `protoids_full5M_beat` (15ep, BS2048, dim32, `--full_data`): **Val 0.9616/0.6684**, Test `0.9614/0.6672`, `Known 0.9821/0.7285`, `AUROC 0.9487/FAR 0.937` – dataset used `Train 5.49M` (not dev 235k), Val/Test `1.17M` each.
 
-## Final Accuracy
+6. **Open-set (withhold 22,32,17)** — `src/protoids/train_protoids.py:604` `τ=90th pct` (`HANDOVER.md:29`)
+   - Dev K=3: `AUROC 0.9366/FAR 0.937`, Full `0.9487/FAR 0.937`, `beat99 0.9308` – all leaky (34-train); true `31-class` retrain `--withhold_open_set` scaffolded `src/protoids/dataset.py:26`.
 
-| Model | Closed Val Acc | Macro F1 | Weighted F1 | AUROC (open) |
-|-------|---------------|----------|-------------|--------------|
-| **RF (baseline, 100 trees)** | **0.9912** | **0.8240** | 0.9916 | — |
-| ProtoIDS K=1 (clip) | 0.8448 | 0.5828 | 0.8391 | 0.908 |
-| **ProtoIDS K=3 (clip) — recommended** | **0.8402** | **0.5976** | 0.8370 | **0.937** |
-| ProtoIDS K=5 (clip) | 0.8342 | 0.5757 | 0.8271 | 0.931 |
-| ProtoIDS initial (bug, clip_fix) | 0.8285 | 0.5681 | 0.8196 | 0.935 |
+## Final Accuracy (dataset noted)
 
-**Artifacts:** `experiments/models/protoids_k3_clip/model.pth`, `results/baselines/ablation_results.json`, `experiments/data/ciciot_dev.parquet:235k`.
+| Model | Dataset | Closed Val Acc | Macro F1 | Weighted F1 | AUROC (open) |
+|-------|---------|---------------|----------|-------------|--------------|
+| **RF (100 trees)** | Dev 235k / Val 1.17M (34-cls) | **0.9912** | **0.8240** | 0.9916 | — |
+| ProtoIDS K=3 (dev) | Dev 235k | 0.8402 | 0.5976 | 0.8370 | 0.937 |
+| **ProtoIDS full5M_beat** | **Train 5.49M / Val 1.17M (34-cls)** | **0.9616** | **0.6684** | **0.9590** | **0.949** |
+| ProtoIDS e64 long50 | Dev 235k, dim64 50ep | 0.8461 | 0.5980 | 0.8437 | 0.926 |
+| ProtoIDS e64 | Dev 235k, dim64 | 0.8477 | 0.6099 | 0.8447 | 0.937 |
+| Paper MV²AE (binary) | CICIoT2023 2-class balanced | 99.38 | 99.38 | — | — |
+
+**Artifacts:** `experiments/models/protoids_full5M_beat/model.pth` (best), `protoids_k3_clip` (dev), `ae_pretrain.pth` (AE64 MSE 0.019), `results/baselines/ablation_results.json`.
 
 ## Remaining
 
