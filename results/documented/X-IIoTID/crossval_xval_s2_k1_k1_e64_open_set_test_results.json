@@ -1,0 +1,18 @@
+{
+  "known_accuracy": 0.9948225660594858,
+  "known_macro_f1": 0.8865066379011604,
+  "known_recall": 0.859200781444578,
+  "unknown_precision": 0.28851896562678697,
+  "unknown_recall": 0.40189397291795736,
+  "unknown_f1": 0.335897625564021,
+  "far": 0.5981060270820426,
+  "fdr": 0.7114810343732131,
+  "krr": 0.10013681847854275,
+  "auc_roc": 0.7511956734992922,
+  "auc_pr": 0.3318965879090682,
+  "threshold": 0.06519567966461182,
+  "known_samples_correctly_accepted": 100629,
+  "known_samples_rejected_as_unknown": 6758,
+  "unknown_samples_correctly_rejected": 4541,
+  "unknown_samples_incorrectly_accepted": 11198
+}

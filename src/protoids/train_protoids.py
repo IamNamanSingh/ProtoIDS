@@ -357,6 +357,12 @@ def main():
                        help='Dataset to use: ciciot2023, edgeiiot or xiiotid')
     parser.add_argument('--withheld_classes', nargs='*', type=str, default=None,
                        help='List of class names to withhold from training (for open-set). If omitted, uses dataset-specific defaults when --withhold_open_set is set.')
+    parser.add_argument('--withheld_families', nargs='*', type=str, default=None,
+                       help='X-IIoTID only: withhold every class1 type belonging to these '
+                            'class2 attack families (e.g. Exfiltration "Lateral _movement"). '
+                            'Stronger test than --withheld_classes: the model sees no member '
+                            'of the family, only unrelated attacks. Mutually exclusive with '
+                            '--withheld_classes.')
     parser.add_argument('--xiiotid_label_col', type=str, default=None,
                        help='X-IIoTID only: force a target label column (default: auto-detect, prefers Sub-Category)')
     parser.add_argument('--max_rows', type=int, default=None,
@@ -414,7 +420,23 @@ def main():
         # do NOT hard-code a default. Without an explicit choice we inspect the
         # data and suggest the most frequent attack classes (see
         # suggest_xiiotid_withheld), keeping the choice visible and reviewable.
-        if args.withheld_classes is not None:
+        if args.withheld_families:
+            if args.withheld_classes:
+                print("ERROR: use --withheld_families OR --withheld_classes, not both.")
+                sys.exit(1)
+            from protoids.dataset import expand_xiiotid_families
+            data_dir_for_fam = os.environ.get('XIIOTID_DATA_DIR', 'datasets/xiiotid')
+            try:
+                withheld_names, members = expand_xiiotid_families(
+                    data_dir_for_fam, args.withheld_families, args.xiiotid_label_col)
+            except Exception as exc:
+                print(f"ERROR: could not expand families {args.withheld_families}: {exc}")
+                sys.exit(1)
+            print(f"Withholding whole attack families: {args.withheld_families}")
+            for fam, types in members.items():
+                print(f"  {fam}: {types}")
+            print(f"  -> {len(withheld_names)} class1 types withheld")
+        elif args.withheld_classes is not None:
             withheld_names = args.withheld_classes
         else:
             print("No --withheld_classes given for X-IIoTID.")

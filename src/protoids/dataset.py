@@ -1494,6 +1494,58 @@ def _split_paths(base, split_name):
             os.path.join(base, split_name, 'labels.dat'))
 
 
+def expand_xiiotid_families(data_dir: str, families: List[str],
+                            label_col: Optional[str] = None
+                            ) -> Tuple[List[str], Dict[str, List[str]]]:
+    """
+    Resolve class2 attack families to the class1 types they contain.
+
+    Withholding a whole family is a strictly harder test than withholding
+    individual classes: the model has never seen ANY member of that attack
+    category, not merely a different type inside a category it already knows.
+    That is the realistic zero-day scenario.
+    """
+    csv_path = _locate_xiiotid_csv(data_dir)
+    header = pd.read_csv(csv_path, nrows=0)
+    cols = header.columns.tolist()
+    if label_col is None:
+        label_col = rank_xiiotid_label_columns(csv_path, cols)[0][0]
+
+    family_col = None
+    for cand in ('class2', 'Attack Type', 'Attack Category', 'family'):
+        norm = {c.strip().lower(): c for c in cols}
+        if cand.lower() in norm:
+            family_col = norm[cand.lower()]
+            break
+    if family_col is None:
+        raise ValueError(
+            f"No family/attack-category column found in {cols}. X-IIoTID exposes "
+            f"one as class2; other mirrors use 'Attack Type'/'Attack Category'.")
+
+    df = pd.read_csv(csv_path, usecols=[family_col, label_col], low_memory=False)
+    df = df.dropna()
+    available = sorted(df[family_col].astype(str).unique().tolist())
+
+    # Tolerate case/underscore differences in the family names given on the CLI.
+    lookup = {f.strip().lower(): f for f in available}
+    chosen, members = [], {}
+    for fam in families:
+        key = fam.strip().lower()
+        if key not in lookup:
+            raise ValueError(
+                f"Unknown family {fam!r}. Available {family_col} values: {available}")
+        real = lookup[key]
+        types = sorted(df.loc[df[family_col].astype(str) == real, label_col]
+                       .astype(str).unique().tolist())
+        members[real] = types
+        chosen.extend(types)
+
+    chosen = sorted(set(chosen))
+    if not chosen:
+        raise ValueError("family expansion produced no classes")
+    return chosen, members
+
+
 def create_loaders_from_cache(processed_dir: str, batch_size: int = 256,
                               shuffle_train: bool = True) -> Tuple:
     """

@@ -1,0 +1,44 @@
+{
+  "multiclass": {
+    "label_to_int": {
+      "BruteForce": 0,
+      "Dictionary": 1,
+      "Discovering_resources": 2,
+      "Fake_notification": 3,
+      "False_data_injection": 4,
+      "Generic_scanning": 5,
+      "MitM": 6,
+      "Normal": 7,
+      "RDOS": 8,
+      "Reverse_shell": 9,
+      "Scanning_vulnerability": 10,
+      "crypto-ransomware": 11,
+      "fuzzing": 12,
+      "insider_malcious": 13
+    }
+  },
+  "classes": [
+    "BruteForce",
+    "Dictionary",
+    "Discovering_resources",
+    "Fake_notification",
+    "False_data_injection",
+    "Generic_scanning",
+    "MitM",
+    "Normal",
+    "RDOS",
+    "Reverse_shell",
+    "Scanning_vulnerability",
+    "crypto-ransomware",
+    "fuzzing",
+    "insider_malcious"
+  ],
+  "withheld_classes": [
+    "C&C",
+    "Exfiltration",
+    "MQTT_cloud_broker_subscription",
+    "Modbus_register_reading",
+    "TCP Relay"
+  ],
+  "unknown_class_index": 14
+}
