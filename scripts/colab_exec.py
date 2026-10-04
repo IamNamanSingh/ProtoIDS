@@ -60,7 +60,6 @@ def pick_kernel(base: str, token: str, kernel_id: str | None, name: str) -> str:
                 return kernel_id
         raise SystemExit(f"kernel {kernel_id} not found. available: "
                          f"{[k['id'] for k in kernels]}")
-    # Prefer a running kernel (that is the one the Colab UI is attached to).
     running = [k for k in kernels if k.get("execution_state") == "idle" and k.get("connections")]
     if running:
         print(f"[colab_exec] attaching to running kernel {running[0]['id']}",
@@ -87,7 +86,6 @@ def main() -> int:
     ap.add_argument("-f", "--file", default=None, help="file with the code to run")
     args = ap.parse_args()
 
-    # A full notebook URL is a convenient way to pass the token.
     if args.url and "token=" in args.url and not args.token:
         qs = urlparse(args.url).query
         args.token = dict(p.split("=", 1) for p in qs.split("&") if "=" in p).get("token")
@@ -149,7 +147,6 @@ def main() -> int:
             print(f"\n\033[31m{content['ename']}: {content['evalue']}\033[0m",
                   file=sys.stderr)
             for line in content.get("traceback", []):
-                # strip the ANSI colour codes tornado adds
                 print(line.replace("\x1b[0m", "").replace("\x1b[31m", "")
                       .replace("\x1b[1;31m", ""), file=sys.stderr)
         elif mtype == "execute_reply":

@@ -416,10 +416,6 @@ def main():
         else:
             withheld_names = []  # no withholding by default for Edge-IIoT
     else:  # xiiotid
-        # X-IIoTID has many classes and the release varies between mirrors, so we
-        # do NOT hard-code a default. Without an explicit choice we inspect the
-        # data and suggest the most frequent attack classes (see
-        # suggest_xiiotid_withheld), keeping the choice visible and reviewable.
         if args.withheld_families:
             if args.withheld_classes:
                 print("ERROR: use --withheld_families OR --withheld_classes, not both.")
@@ -465,7 +461,6 @@ def main():
         if args.full_data:
             print("Using FULL 5.5M train (CICIOT23/train/train.csv) – not dev parquet")
     elif args.dataset == 'edgeiiot':
-        # data_dir must point at the directory holding the Edge-IIoT CSV.
         data_dir = os.environ.get('EDGEIIOT_DATA_DIR', '')
         if not data_dir:
             print("ERROR: For Edge-IIoT dataset, set EDGEIIOT_DATA_DIR to the directory containing the CSV file.")
@@ -474,7 +469,6 @@ def main():
         development_subset_path = None  # Edge-IIoT does not use development subset
         print(f"Using Edge-IIoT dataset from directory: {data_dir}")
     else:  # xiiotid
-        # The downloader (src/data/download_xiiotid.py) drops the CSV here.
         data_dir = os.environ.get('XIIOTID_DATA_DIR', 'datasets/xiiotid')
         artifact_dir = 'results/baselines'
         development_subset_path = None  # X-IIoTID is processed end-to-end, no dev subset
@@ -728,7 +722,6 @@ def main():
         with open(label_mapping_path, 'r') as f:
             label_mapping = json.load(f)
     else:
-        # Edge-IIoT / X-IIoTID: label mapping is written by the loader into scaler_save_dir
         if scaler_save_dir is not None:
             label_mapping_path = os.path.join(scaler_save_dir, f'{args.dataset}_label_mapping.json')
             if os.path.exists(label_mapping_path):
@@ -742,9 +735,6 @@ def main():
     if label_mapping is not None:
         int_to_label = {v: k for k, v in label_mapping['multiclass']['label_to_int'].items()}
         label_to_int_map = label_mapping['multiclass']['label_to_int']
-        # Withheld classes are absent from the known-class mapping BY DESIGN, so
-        # report them by name and point at the reserved unknown slot instead of
-        # printing an empty index list.
         mapped = {cls: label_to_int_map[cls] for cls in withheld_class_names
                   if cls in label_to_int_map}
         print(f"Withheld class names : {sorted(withheld_class_names)}")
@@ -756,11 +746,6 @@ def main():
     else:
         withheld_class_indices = []
 
-    # Note: with the true open-set loaders the model IS trained without the
-    # withheld classes - they were already removed before the scaler was fitted
-    # and before any prototype was learned. Here we only need to separate the
-    # already-processed validation rows into known / unknown, and calibrate the
-    # threshold on known validation rows alone.
 
     # Create datasets for open-set evaluation
     # Known data: validation set excluding withheld classes
@@ -963,7 +948,10 @@ def main():
 if __name__ == '__main__':
     try:
         main()
+    except SystemExit:
+        raise
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"ERROR: {e}", flush=True)
         import traceback
         traceback.print_exc()
+        raise SystemExit(1)

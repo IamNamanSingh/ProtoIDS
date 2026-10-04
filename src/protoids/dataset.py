@@ -118,7 +118,6 @@ def _create_data_loaders_ciciot2023(data_dir: str, batch_size: int = 256,
     os.makedirs(processed_base_dir, exist_ok=True)
     print(f"Processed data will be saved to: {processed_base_dir}")
 
-    # ----- PASS 1: TRAINING - FIT SCALER AND COLLECT KNOWN LABELS -----
     print("Pass 1: Fitting scaler on training data (after withholding) and collecting known labels...")
     # Initialize scaler
     scaler = StandardScaler()
@@ -189,7 +188,6 @@ def _create_data_loaders_ciciot2023(data_dir: str, batch_size: int = 256,
         print(f"DEBUG: About to save label mapping to {os.path.join(scaler_save_dir, 'ciciot_label_mapping.json')}")
         print(f"DEBUG: Label mapping saved")
 
-    # ----- PASS 2: TRAINING - CREATE AND SAVE PROCESSED DATA TO MEMMAP ARRAYS -----
     print("Pass 2: Creating processed training data and saving to memmap arrays...")
     processed_train_dir = os.path.join(processed_base_dir, 'train')
     os.makedirs(processed_train_dir, exist_ok=True)
@@ -253,7 +251,6 @@ def _create_data_loaders_ciciot2023(data_dir: str, batch_size: int = 256,
     train_features.flush()
     train_labels.flush()
 
-    # ----- PASS 3: VALIDATION - PROCESS AND SAVE TO MEMMAP -----
     print("Pass 3: Processing validation data and saving to memmap arrays...")
     processed_val_dir = os.path.join(processed_base_dir, 'validation')
     os.makedirs(processed_val_dir, exist_ok=True)
@@ -329,7 +326,6 @@ def _create_data_loaders_ciciot2023(data_dir: str, batch_size: int = 256,
     val_features.flush()
     val_labels.flush()
 
-    # ----- PASS 4: TEST - PROCESS AND SAVE TO MEMMAP -----
     print("Pass 4: Processing test data and saving to memmap arrays...")
     processed_test_dir = os.path.join(processed_base_dir, 'test')
     os.makedirs(processed_test_dir, exist_ok=True)
@@ -919,44 +915,15 @@ def _create_data_loaders_edgeiiot(data_dir: str, batch_size: int = 256,
     return train_loader, val_loader, test_loader, num_classes, input_dim
 
 
-# ===========================================================================
-# X-IIoTID support
-# ===========================================================================
-# X-IIoTID is a single large CSV. We deliberately DISCOVER the schema at runtime
-# rather than hard-coding column names, because the published release mixes
-# versions (the Kaggle CSV has ~42 network features + 3 label levels, while the
-# paper's final release advertises 68 features across several views). Discovery
-# keeps the pipeline honest and version-tolerant.
-# ===========================================================================
 
-# Label columns. Mirrors of X-IIoTID disagree on naming, so we look for BOTH
-# the descriptive names (the 42-column Kaggle CSV) and the class1/class2/class3
-# triple (the 68-column release described in the paper, which is what the
-# authors' own archive contains):
-#     class1 -> 19 most granular attack types
-#     class2 -> 10 attack categories
-#     class3 -> binary Normal/Attack
-# Granularity is decided from the data, not from the numbering, so the code
-# keeps working if a mirror renames or reorders the columns.
 XIIOTID_LABEL_NAMES = ['Sub-Category', 'Attack Type', 'Attack Category', 'Label']
 XIIOTID_LABEL_PATTERN = re.compile(r'^class\d+$', re.IGNORECASE)
 
-# Leakage filter. Matching on raw substrings is not safe here: 'ip' occurs in
-# "Scr_ip_bytes" and 'id' occurs in "Avg_ideal_time", so plain substring
-# matching silently deletes real measured features. Instead we tokenise the
-# column name (underscores, punctuation AND camelCase) and only drop a column
-# when it carries an identifier token and no measurement token.
-#   Scr_port       -> [scr, port]         drop  (identifier)
-#   Scr_ip_bytes   -> [scr, ip, bytes]    keep  (byte counter, not an address)
-#   Avg_ideal_time -> [avg, ideal, time]  keep  ('id' is inside "ideal")
-#   Timestamp      -> [timestamp]         drop
 XIIOTID_ID_TOKENS = {
     'ip', 'ips', 'mac', 'macs', 'port', 'ports',
     'date', 'datetime', 'timestamp', 'time_stamp', 'id', 'ids', 'index',
     'uuid', 'address', 'addresses', 'flowid',
 }
-# A measurement unit means the column records a quantity rather than an
-# identifier, so it wins over an incidental identifier token.
 XIIOTID_MEASURE_TOKENS = {
     'bytes', 'byte', 'pkts', 'pkt', 'packet', 'packets', 'count', 'rate',
     'ratio', 'length', 'size', 'time', 'duration', 'total', 'avg', 'std',
@@ -980,11 +947,6 @@ def looks_like_xiiotid_identifier(name: str) -> bool:
         return False
     return any(t in XIIOTID_ID_TOKENS for t in tokens)
 
-# Columns that encode a third-party intrusion-detection verdict rather than
-# observed behaviour. They are not train/test leakage, but they let the model
-# read an existing classifier's answer instead of learning from traffic, which
-# inflates every metric. Dropped by default; set EXCLUDE_IDS_ALERTS=False to
-# keep them for an ablation.
 XIIOTID_IDS_ALERT_COLUMNS = ['anomaly_alert', 'OSSEC_alert', 'OSSEC_alert_level']
 XIIOTID_EXCLUDE_IDS_ALERTS = True
 
@@ -1050,7 +1012,6 @@ def discover_xiiotid_columns(columns: List[str], label_col: Optional[str] = None
             raise ValueError(
                 f"Could not find a label column among {XIIOTID_LABEL_NAMES} or a "
                 f"'class<N>' column. Got: {columns}")
-        # Most specific descriptive name, else lowest-numbered class<N>.
         named = [c for c in XIIOTID_LABEL_NAMES if c.lower() in norm]
         if named:
             label_col = norm[named[0].lower()]
@@ -1058,7 +1019,6 @@ def discover_xiiotid_columns(columns: List[str], label_col: Optional[str] = None
             classlike = [c for c in label_columns if XIIOTID_LABEL_PATTERN.match(c.strip())]
             label_col = sorted(classlike, key=lambda c: int(re.sub(r'\D', '', c)))[0]
 
-    # Every other label level is metadata, not a feature.
     reasons: Dict[str, str] = {}
     for c in label_columns:
         if c != label_col:
@@ -1109,7 +1069,6 @@ def _locate_xiiotid_csv(data_dir: str) -> str:
                 candidates.append(os.path.join(root, f))
     if not candidates:
         raise FileNotFoundError(f"No CSV file found under {data_dir}")
-    # Prefer names that mention the dataset, else the largest CSV.
     named = [c for c in candidates if 'x-iiotid' in os.path.basename(c).lower()
              or 'xiiotid' in os.path.basename(c).lower()]
     if named:
@@ -1123,7 +1082,6 @@ def _read_xiiotid_label(data_dir: str, label_col: Optional[str] = None,
     csv_path = _locate_xiiotid_csv(data_dir)
     header = pd.read_csv(csv_path, nrows=0)
     if label_col is None:
-        # Most granular label level, decided from the data.
         ranked = rank_xiiotid_label_columns(csv_path, header.columns.tolist())
         label_col = ranked[0][0]
     df = pd.read_csv(csv_path, usecols=[label_col], nrows=nrows, low_memory=False)
@@ -1158,7 +1116,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
     csv_path = _locate_xiiotid_csv(data_dir)
     print(f"Loading X-IIoTID dataset from: {csv_path}")
 
-    # ---- discover schema ----
     header = pd.read_csv(csv_path, nrows=0)
     all_columns = header.columns.tolist()
     ranked = rank_xiiotid_label_columns(csv_path, all_columns)
@@ -1176,7 +1133,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
     print(f"Target label column: {label_col}")
     print(f"Features before constant-column removal: {len(feature_cols)}")
 
-    # ---- read the label column to enumerate classes ----
     label_series = pd.read_csv(csv_path, usecols=[label_col], low_memory=False)
     if max_rows is not None:
         label_series = label_series.iloc[:max_rows]
@@ -1203,22 +1159,12 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
     if withheld_set:
         print(f"Withheld (unknown): {sorted(withheld_set)}")
 
-    # Map every row to either a known int or the unknown int
     y_int = np.full(num_rows, fill_value=(unknown_class_index if open_set else -1), dtype=np.int64)
     for cls, idx in label_to_int.items():
         y_int[y_raw == cls] = idx
     if not open_set:
         y_int[y_int == -1] = 0  # shouldn't happen, but guard
 
-    # ---- split ----
-    # 'random'  stratified 70/15/15 (fast to iterate, but time-adjacent flows end
-    #           up on both sides of the boundary, so it flatters the model)
-    # 'temporal' contiguous time blocks, earliest -> train, latest -> test. This
-    #           is the honest generalisation test for an IDS: the model must
-    #           handle traffic it has never seen in time, which is what actually
-    #           happens in deployment. X-IIoTID spans 303 days and the class mix
-    #           drifts heavily over that window, so the two splits are not
-    #           interchangeable.
     if split_strategy == 'random':
         X_dummy = np.zeros((num_rows, 1), dtype=np.float32)
         sss1 = StratifiedShuffleSplit(n_splits=1, test_size=val_frac, random_state=42)
@@ -1247,12 +1193,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
         if tnum.notna().sum() < len(tnum) * 0.5:
             parsed = pd.to_datetime(tvals, errors='coerce', format='mixed')
             tnum = parsed.astype('int64', errors='coerce') / 1e9
-        # X-IIoTID has a few hundred rows whose Timestamp is not numeric (the
-        # column is inferred as mixed type, so some values arrive as the strings
-        # "TRUE"/"FALSE"). They are imputed with the median timestamp rather than
-        # dropped, because every downstream array is indexed by absolute CSV row
-        # position and removing rows here would silently misalign them. The count
-        # is reported rather than hidden.
         bad = tnum.isna()
         if bad.any():
             n_bad = int(bad.sum())
@@ -1284,7 +1224,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
                          f"got {split_strategy!r}")
     print(f"Split sizes (raw): train {len(train_indices)}, val {len(val_indices)}, test {len(test_indices)}")
 
-    # Known-train mask: drop withheld rows from training entirely
     is_known_train = np.zeros(num_rows, dtype=bool)
     is_known_train[train_indices] = True
     if open_set:
@@ -1297,7 +1236,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
     split_of_row[val_indices] = 1
     split_of_row[test_indices] = 2
 
-    # ---- Pass 1: column stats on known-train rows only (chunked) ----
     print("Pass 1: computing per-column stats on known-train rows...")
     n_features = len(feature_cols)
     col_sum = np.zeros(n_features, dtype=np.float64)
@@ -1336,7 +1274,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
     input_dim = len(final_features)
     print(f"Final input dimension: {input_dim}")
 
-    # ---- Pass 2: write scaled memmaps (chunked, vectorized) ----
     print("Pass 2: scaling and writing memmap arrays...")
     processed_base = (scaler_save_dir.replace('results', 'processed')
                       if scaler_save_dir else os.path.join('experiments', 'processed', 'xiiotid'))
@@ -1357,7 +1294,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
         labs = np.memmap(lp, dtype='int64', mode='w+', shape=(n,))
         return feats, labs
 
-    # counts of what will actually be written per split
     n_train_write = known_train_count
     n_val_write = int((split_of_row == 1).sum())
     n_test_write = int((split_of_row == 2).sum())
@@ -1376,7 +1312,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
         Xc = (Xc[:, keep_mask] - means_final) / stds_final
         Xc = np.clip(Xc, -5, 5).astype(np.float32)
 
-        # train: only known-train rows
         m = (splits == 0) & is_known_train[offset:end]
         if np.any(m):
             train_features[w_train:w_train + int(m.sum())] = Xc[m]
@@ -1402,7 +1337,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
     test_features.flush(); test_labels.flush()
     print(f"Written: train {w_train}, val {w_val}, test {w_test}")
 
-    # ---- rebuild a fitted scaler object for downstream use ----
     scaler = StandardScaler()
     scaler.mean_ = means_final
     scaler.scale_ = stds_final
@@ -1429,11 +1363,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
 
     num_classes = (len(known_list) + 1) if open_set else len(known_list)
 
-    # ---- split manifest: lets a sweep re-train without re-parsing the CSV ----
-    # Re-reading 355 MB of CSV for every hyper-parameter trial is the dominant
-    # cost of a sweep, and it is identical work every time because it depends
-    # only on (data, withheld classes, seed). Recording the shape here allows
-    # create_loaders_from_cache() to rebuild the loaders in milliseconds.
     split_meta = {
         'dataset': dataset_name,
         'processed_dir': processed_base,
@@ -1460,7 +1389,6 @@ def _create_data_loaders_xiiotid(data_dir: str, batch_size: int = 256,
         json.dump(split_meta, f, indent=2)
     print(f"Split manifest: {os.path.join(processed_base, 'split_meta.json')}")
 
-    # ---- persist artifacts ----
     if scaler_save_dir is not None:
         os.makedirs(scaler_save_dir, exist_ok=True)
         joblib.dump(scaler, os.path.join(scaler_save_dir, f'{dataset_name}_preprocessor.joblib'))
@@ -1526,7 +1454,6 @@ def expand_xiiotid_families(data_dir: str, families: List[str],
     df = df.dropna()
     available = sorted(df[family_col].astype(str).unique().tolist())
 
-    # Tolerate case/underscore differences in the family names given on the CLI.
     lookup = {f.strip().lower(): f for f in available}
     chosen, members = [], {}
     for fam in families:
@@ -1713,3 +1640,4 @@ if __name__ == '__main__':
         print(f"Input dimension: {input_dim}")
     except Exception as e:
         print(f"Edge-IIoTset test failed (expected if CSV not accessible): {e}")
+

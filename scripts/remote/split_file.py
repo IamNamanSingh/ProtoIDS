@@ -7,9 +7,7 @@ Split / reassemble a large file for transfer through the Colab Contents API.
 enough to pass, and rebuilds it on the far side, verifying the SHA-256 so a
 truncated part can never masquerade as a complete file.
 
-    # local
     python scripts/remote/split_file.py split big.csv /tmp/parts --part-mb 32
-    # remote
     python scripts/remote/split_file.py join /tmp/parts /content/big.csv
 """
 import argparse
@@ -21,7 +19,6 @@ import sys
 from pathlib import Path
 
 DEFAULT_PART_BYTES = 32 * 1024 * 1024
-# A part is named <stem>.part0000 etc. so a plain sorted listing reassembles it.
 SUFFIX = ".part"
 
 

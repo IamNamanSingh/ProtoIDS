@@ -20,19 +20,49 @@ the open-set claims, which are the point of the project.
 import argparse
 import json
 import os
+import random
 import sys
 import time
 import warnings
 from typing import Dict, List, Optional
 
+os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+
 import numpy as np
 import torch
 from sklearn.metrics import (average_precision_score, roc_auc_score)
 
-# memmap-backed tensors are read-only; the resulting torch warning is expected
-# and would otherwise repeat for every batch of every trial.
 warnings.filterwarnings("ignore", message=".*not writable.*")
 warnings.filterwarnings("ignore", category=UserWarning, module="torch.*")
+
+
+def enforce_determinism(seed: int) -> None:
+    """
+    Make a trial reproducible run to run.
+
+    Without this, two runs of the same config on the same split with the same
+    seed produced AUROC differing by up to 0.16 (sd 0.068), and the config
+    ranking came out uncorrelated with itself (Spearman 0.32). The causes are
+    non-deterministic CUDA reductions, cuDNN algorithm autotuning, TF32
+    matmuls, and shuffle state inherited from earlier trials.
+
+    Bitwise determinism is best-effort: if an op still has no deterministic
+    kernel the sweep warns and the multi-seed averaging in the reporting step
+    is what actually makes the comparison sound.
+    """
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -40,10 +70,6 @@ from protoids.dataset import create_loaders_from_cache            # noqa: E402
 from protoids.protoids_model import ProtoIDS                      # noqa: E402
 from protoids.training import train_protoids                      # noqa: E402
 
-
-# ---------------------------------------------------------------------------
-# Evaluation
-# ---------------------------------------------------------------------------
 
 class GpuResidentLoader:
     """
@@ -75,15 +101,22 @@ class GpuResidentLoader:
             self.X, self.y = X, y
         self.n = len(y)
         self.batch_size = loader.batch_size
-        # The generator must live on the same device as the tensors it indexes,
-        # hence self.X (already moved) rather than the local CPU copy.
         self.generator = torch.Generator(device=self.X.device).manual_seed(seed)
 
     def __len__(self):
         return (self.n + self.batch_size - 1) // self.batch_size
 
+    def reseed(self, seed: int) -> None:
+        """
+        Reset the shuffle generator for a new trial.
+
+        The loader is built once and reused across trials, so without this every
+        config would inherit the previous config's shuffle sequence and the
+        comparison would be entangled with trial order.
+        """
+        self.generator.manual_seed(seed)
+
     def __iter__(self):
-        # Held resident: index the GPU tensors directly, no host round-trip.
         if self.resident:
             perm = torch.randperm(self.n, device=self.X.device,
                                   generator=self.generator)
@@ -201,8 +234,10 @@ def evaluate_config(cfg: Dict, processed_dir: str, device: torch.device,
     input_dim = cache['input_dim']
     unknown_idx = cache['unknown_class_index']
 
-    torch.manual_seed(cfg['seed'])
-    np.random.seed(cfg['seed'])
+    enforce_determinism(cfg['seed'])
+    for loader in cache['loaders']:
+        if hasattr(loader, 'reseed'):
+            loader.reseed(cfg['seed'])
 
     model = ProtoIDS(
         input_dim=input_dim, num_classes=num_classes,
@@ -212,7 +247,6 @@ def evaluate_config(cfg: Dict, processed_dir: str, device: torch.device,
         unknown_class_index=unknown_idx,
     ).to(device)
 
-    # KMeans-style prototype init on the training embeddings.
     model.eval()
     embs, labs = [], []
     with torch.no_grad():
@@ -241,16 +275,9 @@ def evaluate_config(cfg: Dict, processed_dir: str, device: torch.device,
     val_metrics = _open_set_metrics(d_val, p_val, y_val, unknown_idx, thr)
 
     try:
-        # Score = the distance itself: an unknown sample is flagged when it is
-        # FAR from every known prototype, so a LARGER distance must mean a
-        # HIGHER chance of being unknown. Negating here would invert the AUROC
-        # and make the search reward the worst possible models.
         is_unknown = (y_val == unknown_idx).astype(int)
         val_metrics['auroc'] = float(roc_auc_score(is_unknown, d_val))
         val_metrics['aupr'] = float(average_precision_score(is_unknown, d_val))
-        # An AUROC below 0.5 means the score points the wrong way, i.e. unknown
-        # samples sit CLOSER to the prototypes than known ones. That is a bug,
-        # not a result, so fail loudly instead of letting the search optimise it.
         if val_metrics['auroc'] < 0.5:
             raise RuntimeError(
                 f"AUROC {val_metrics['auroc']:.3f} < 0.5: the distance score is "
@@ -260,7 +287,6 @@ def evaluate_config(cfg: Dict, processed_dir: str, device: torch.device,
         val_metrics['auroc'] = float('nan')
         val_metrics['aupr'] = float('nan')
 
-    # Rank-threshold-free separation, useful as a tie-breaker.
     val_metrics['mean_known_dist'] = float(d_val[y_val != unknown_idx].mean())
     val_metrics['mean_unknown_dist'] = float(d_val[y_val == unknown_idx].mean())
     tl = history.get('train_loss') or []
@@ -297,13 +323,6 @@ def score(m: Dict, weights: Dict[str, float]) -> float:
     return float(sum(weights.get(k, 0.0) * val for k, val in parts.items()))
 
 
-# ---------------------------------------------------------------------------
-# Search space
-# ---------------------------------------------------------------------------
-
-# Fixed for every trial. Batch size and epoch count are held constant so that
-# differences between configurations are attributable to the hyper-parameters
-# under study rather than to the optimisation budget.
 BATCH_SIZE = 256
 EPOCHS = 10
 
@@ -333,7 +352,6 @@ def build_grid(stage: str, seed: int = 42, epochs: int = EPOCHS) -> List[Dict]:
         for p in (80, 85, 90, 95, 97, 99):
             grid.append({**base, 'name': f"thr{p}", 'threshold_percentile': float(p)})
     elif stage == 'optim':
-        # Epoch count is deliberately NOT a search dimension (see EPOCHS).
         for lr in (5e-4, 1e-3, 3e-3):
             for drop in (0.1, 0.2, 0.35):
                 grid.append({**base, 'name': f"lr{lr}_do{drop}",
@@ -413,13 +431,8 @@ def main():
         results.append(r)
         print(f"  objective = {r['objective']:.4f}\n", flush=True)
 
-    # Predicted labels must be class indices. If any trial produced prototype
-    # indices instead, every accuracy in this sweep is meaningless, so refuse to
-    # rank rather than report a number that looks plausible.
     max_class = meta['num_classes'] - 1
     for r in results:
-        # unknown_detection_rate and known_accuracy are only meaningful if the
-        # label space is right; a K>1 run that collapsed will show up here.
         v = r['validation']
         if v['known_accuracy'] < 0.05 and r['config']['num_prototypes'] > 1:
             raise RuntimeError(

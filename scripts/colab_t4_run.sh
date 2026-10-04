@@ -91,8 +91,7 @@ upload_csv() {
   "$PY" "$REPO_ROOT/scripts/remote/split_file.py" split "$csv" "$parts" \
     --part-mb "$PART_MB" >/dev/null
 
-  colab exec -s "$SESSION" --timeout "$QUICK_TIMEOUT" \
-    -c "print(__import__('os').makedirs('/content/datasets/xiiotid', exist_ok=True))" >/dev/null 2>&1 || true
+  echo "print(__import__('os').makedirs('/content/datasets/xiiotid', exist_ok=True))" | colab exec -s "$SESSION" --timeout "$QUICK_TIMEOUT" >/dev/null 2>&1 || true
 
   local total; total="$(ls -1 "$parts" | grep -c '\.part[0-9]' || true)"
   local n=0
@@ -105,17 +104,17 @@ upload_csv() {
   colab upload -s "$SESSION" "$REPO_ROOT/scripts/remote/split_file.py" \
     "/content/datasets/xiiotid/split_file.py" >/dev/null
   echo "   reassembling and checksumming on the VM"
-  colab exec -s "$SESSION" --timeout "$TIMEOUT" -c "
+  colab exec -s "$SESSION" --timeout "$TIMEOUT" <<PY
 import os, sys
 D = '/content/datasets/xiiotid'
 sys.path.insert(0, D)
 from split_file import join
 join(D, os.path.join(D, '${name}'))
 for f in os.listdir(D):
-    if f.endswith(tuple('0123456789')) and '.part' in f or f in ('manifest.json', 'split_file.py'):
+    if '.part' in f or f in ('manifest.json', 'split_file.py'):
         os.remove(os.path.join(D, f))
 print('ready:', os.path.join(D, '${name}'))
-"
+PY
 }
 
 case "$DATA_MODE" in
@@ -127,12 +126,12 @@ case "$DATA_MODE" in
   kaggle)
     if [[ -f "$HOME/.kaggle/kaggle.json" ]]; then
       colab upload -s "$SESSION" "$HOME/.kaggle/kaggle.json" "$REMOTE_DIR/kaggle.json"
-      colab exec -s "$SESSION" --timeout "$QUICK_TIMEOUT" -c "
+      colab exec -s "$SESSION" --timeout "$QUICK_TIMEOUT" >/dev/null <<'PY'
 import os, json, shutil
 os.makedirs(os.path.expanduser('~/.kaggle'), exist_ok=True)
 shutil.copy('/content/kaggle.json', os.path.expanduser('~/.kaggle/kaggle.json'))
 print('kaggle credentials installed on the VM')
-" >/dev/null
+PY
     else
       echo "   WARNING: no ~/.kaggle/kaggle.json; the VM cannot pull the dataset"
     fi
@@ -143,11 +142,11 @@ print('kaggle credentials installed on the VM')
     elif [[ -f "$HOME/.kaggle/kaggle.json" ]]; then
       echo "   no local CSV; uploading Kaggle credentials so the VM can fetch it"
       colab upload -s "$SESSION" "$HOME/.kaggle/kaggle.json" "$REMOTE_DIR/kaggle.json"
-      colab exec -s "$SESSION" --timeout "$QUICK_TIMEOUT" -c "
+      colab exec -s "$SESSION" --timeout "$QUICK_TIMEOUT" >/dev/null <<'PY'
 import os, shutil
 os.makedirs(os.path.expanduser('~/.kaggle'), exist_ok=True)
 shutil.copy('/content/kaggle.json', os.path.expanduser('~/.kaggle/kaggle.json'))
-" >/dev/null
+PY
     else
       echo "   WARNING: no local CSV and no Kaggle credentials; the run will stop early"
     fi
@@ -171,11 +170,11 @@ mkdir -p "$LOCAL_OUT"
 for f in summary.json; do
   colab download -s "$SESSION" "/content/ProtoIDS/$f" "$LOCAL_OUT/$f" 2>/dev/null || true
 done
-colab exec -s "$SESSION" -c "
+colab exec -s "$SESSION" 2>/dev/null <<'PY' | tail -20 || true
 import os, glob
 for p in glob.glob('/content/ProtoIDS/experiments/results/*/*.json'):
     print(os.path.relpath(p, '/content/ProtoIDS'))
-" 2>/dev/null | tail -20 || true
+PY
 
 echo
 echo "done. local copy of the summary: $LOCAL_OUT"

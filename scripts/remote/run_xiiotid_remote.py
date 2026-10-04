@@ -54,8 +54,6 @@ def unpack():
     print(f"unpacking {TARBALL} -> {REPO}")
     with tarfile.open(TARBALL) as tf:
         tf.extractall(REPO, filter="data")
-    # `git archive` prefixes paths with the commit-ish when using --prefix only,
-    # so a plain archive unpacks straight into REPO. Handle both layouts.
     inner = REPO / "ProtoIDS" / "src" / "protoids" / "dataset.py"
     if inner.exists():
         print("archive had a ProtoIDS/ prefix; flattening")

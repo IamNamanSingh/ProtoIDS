@@ -29,8 +29,6 @@ from protoids.dataset import (  # noqa: E402
 
 RNG = np.random.default_rng(0)
 
-# A plausible stand-in for the real label vocabulary: one benign class plus
-# attack sub-categories grouped under attack types.
 SUBCATS = [
     "Normal",
     "Fuzzing",
@@ -56,9 +54,7 @@ ATTACK_TYPE = {
     "Ransomware": "Ransomware",
 }
 
-# Columns that must be dropped by the leakage filter.
 LEAKY = ["ID", "Timestamp", "Source IP", "Destination IP", "Source Port", "Destination Port"]
-# Two constant columns, to exercise the constant-column filter.
 CONSTANT = ["os_version", "device_model"]
 
 NUMERIC_FEATURES = [
@@ -80,7 +76,6 @@ def make_csv(path: str, n_per_class: int = 400) -> pd.DataFrame:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     frames = []
     for idx, sub in enumerate(SUBCATS):
-        # Give each class a distinct centroid so the task is learnable.
         centre = RNG.normal(loc=idx * 2.0, scale=1.0, size=(n_per_class, len(NUMERIC_FEATURES)))
         block = pd.DataFrame(centre, columns=NUMERIC_FEATURES)
         block.insert(0, "ID", np.arange(len(block)))
@@ -112,7 +107,6 @@ def main() -> int:
     df = make_csv(csv_path)
     print(f"   {csv_path}  shape={df.shape}")
 
-    # --- discovery ---
     label_col, features, reasons = discover_xiiotid_columns(df.columns.tolist())
     print("\n== discovery ==")
     print(f"   label column : {label_col}")
@@ -121,20 +115,16 @@ def main() -> int:
     assert label_col == "Sub-Category", label_col
     for col in LEAKY + ["Attack Type", "Attack Category", "Label"]:
         assert col not in features, f"{col} should have been dropped"
-    # Constant columns survive discovery; they are dropped later by the loader
-    # using known-train statistics only.
     for col in CONSTANT:
         assert col in features, f"{col} should still be a candidate feature"
     print(f"   constant candidates left for the loader to filter: {CONSTANT}")
 
-    # --- suggestion ---
     lc, suggested, counts = suggest_xiiotid_withheld(work, k=3)
     print("\n== suggestion ==")
     print(f"   label col    : {lc}")
     print(f"   suggested    : {suggested}")
     assert "Normal" not in suggested, "must never withhold the benign class"
 
-    # --- loader ---
     scaler_dir = os.path.join(work, "results")
     processed_dir = os.path.join(work, "processed")
     print("\n== loader (open-set) ==")
@@ -150,7 +140,6 @@ def main() -> int:
 
     expected_classes = len(set(SUBCATS) - set(suggested)) + 1
     assert num_classes == expected_classes, (num_classes, expected_classes)
-    # 45 numeric - 2 constant = 43 features expected
     assert input_dim == len(NUMERIC_FEATURES), (input_dim, len(NUMERIC_FEATURES))
 
     tr_labels = np.asarray(tr.dataset.labels)
@@ -164,30 +153,23 @@ def main() -> int:
     print(f"   val rows      : {len(va_labels)}  (unknown: {int((va_labels == unknown_idx).sum())})")
     print(f"   test rows     : {len(te_labels)}  (unknown: {int((te_labels == unknown_idx).sum())})")
 
-    # 1. no unknown rows in training
     assert not np.any(tr_labels == unknown_idx), "unknown class leaked into training!"
-    # 2. val and test DO contain unknown rows
     assert (va_labels == unknown_idx).sum() > 0, "validation has no unknown samples"
     assert (te_labels == unknown_idx).sum() > 0, "test has no unknown samples"
-    # 3. every known class is represented in training
     n_known = num_classes - 1
     assert set(np.unique(tr_labels).tolist()) == set(range(n_known)), \
         f"training classes {np.unique(tr_labels)} != 0..{n_known - 1}"
 
-    # 4. scaler fitted only on known-train rows: n_samples_seen_ must equal the
-    #    number of known-train rows, not the number of rows in any other split.
     import joblib
     scaler = joblib.load(os.path.join(scaler_dir, "xiiotid_preprocessor.joblib"))
     print(f"   scaler.n_samples_seen_ = {scaler.n_samples_seen_}")
     assert int(scaler.n_samples_seen_) == len(tr_labels), \
         (scaler.n_samples_seen_, len(tr_labels))
 
-    # 5. scaling: train features must be z-scored and clipped to [-5, 5]
     Xtr = np.asarray(tr.dataset.features[:2000])
     assert Xtr.min() >= -5.0 - 1e-6 and Xtr.max() <= 5.0 + 1e-6, (Xtr.min(), Xtr.max())
     print(f"   train feature range: [{Xtr.min():.3f}, {Xtr.max():.3f}]")
 
-    # 6. manifest + label mapping written
     import json
     man = json.load(open(os.path.join(scaler_dir, "xiiotid_feature_manifest.json")))
     lmap = json.load(open(os.path.join(scaler_dir, "xiiotid_label_mapping.json")))
@@ -200,7 +182,6 @@ def main() -> int:
         assert col not in man["retained_columns"], f"{col} should not be a feature"
     assert input_dim == len(man["retained_columns"])
 
-    # 7. closed-set mode still works
     print("\n== loader (closed-set) ==")
     tr2, va2, te2, nc2, id2 = create_data_loaders(
         data_dir=work, batch_size=64, open_set=False,
@@ -212,7 +193,6 @@ def main() -> int:
     assert l2.max() < nc2, "closed-set should not reserve an unknown index"
     print(f"   num_classes={nc2} input_dim={id2} train_rows={len(l2)}")
 
-    # 8. max_rows cap
     print("\n== loader (max_rows smoke) ==")
     tr3, va3, te3, nc3, id3 = create_data_loaders(
         data_dir=work, batch_size=64, open_set=False, max_rows=1000,

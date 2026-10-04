@@ -24,10 +24,8 @@ back to plain environment variables or ``~/.kaggle/kaggle.json`` anywhere else.
 
 Usage
 -----
-    # auto: reuse an existing CSV, otherwise pull from Kaggle
     python -m data.download_xiiotid --dest datasets/xiiotid
 
-    # explicit sources
     python -m data.download_xiiotid --source kaggle --dest datasets/xiiotid
     python -m data.download_xiiotid --source url --url https://.../X-IIoTID.csv
     python -m data.download_xiiotid --source gdrive --gdrive-path /content/drive/MyDrive/xiiotid
@@ -49,26 +47,17 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Optional, List
 
-# ---------------------------------------------------------------------------
-# Dataset constants
-# ---------------------------------------------------------------------------
 
 KAGGLE_REF = "munaalhawawreh/xiiotid-iiot-intrusion-dataset"
 KAGGLE_FILE = "X-IIoTID Dataset.csv"
-# Exact archive size reported by the Kaggle API for version 1 (2021-10-08).
 EXPECTED_ARCHIVE_BYTES = 355_308_902
 EXPECTED_ROWS = 820_834
 EXPECTED_COLUMNS = 49  # 42 features + 3 label levels + id/timestamp/ip/port/...
 
 DEFAULT_DEST = os.path.join("datasets", "xiiotid")
 
-# Substrings that identify the CSV regardless of where it was found.
 _CSV_HINTS = ("x-iiotid", "xiiotid", "x-iiot")
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _log(msg: str) -> None:
     print(f"[xiiotid] {msg}", flush=True)
@@ -105,7 +94,6 @@ def _write_kaggle_credentials(username: Optional[str] = None,
     key = key or _secret("KAGGLE_KEY")
 
     if not (username and key):
-        # Maybe the user already has a token file on disk.
         if os.path.exists(os.path.expanduser("~/.kaggle/kaggle.json")):
             _log("Using existing ~/.kaggle/kaggle.json")
             return True
@@ -131,7 +119,6 @@ def _download_from_kaggle(dest_dir: str, force: bool = False) -> Optional[str]:
 
     os.makedirs(dest_dir, exist_ok=True)
 
-    # --- attempt 1: kagglehub -------------------------------------------------
     try:
         import kagglehub
     except ImportError:
@@ -143,7 +130,6 @@ def _download_from_kaggle(dest_dir: str, force: bool = False) -> Optional[str]:
             cached = kagglehub.dataset_download(KAGGLE_REF)
             found = _find_csv(cached) or _find_csv(dest_dir)
             if found is None:
-                # kagglehub puts the archive (or CSV) in a cache dir; copy it out.
                 candidate = _find_csv(cached, require_hint=False)
                 if candidate is None:
                     for name in os.listdir(cached):
@@ -165,7 +151,6 @@ def _download_from_kaggle(dest_dir: str, force: bool = False) -> Optional[str]:
         except Exception as exc:  # noqa: BLE001 - fall through to the CLI
             _log(f"kagglehub failed ({exc}); trying the kaggle CLI...")
 
-    # --- attempt 2: kaggle CLI ------------------------------------------------
     try:
         import subprocess
         cmd = [sys.executable, "-m", "kaggle", "datasets", "download",
@@ -252,10 +237,6 @@ def _find_csv(root: str, require_hint: bool = True) -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Verification
-# ---------------------------------------------------------------------------
-
 def verify_csv(csv_path: str, read_rows: bool = True) -> dict:
     """
     Cheap sanity check of the downloaded file. Never raises; returns a report.
@@ -274,7 +255,6 @@ def verify_csv(csv_path: str, read_rows: bool = True) -> dict:
         report["n_columns"] = len(header.columns)
         report["columns"] = header.columns.tolist()
         if read_rows:
-            # Row count without materialising the whole frame.
             rows = 0
             with open(csv_path, "rb") as fh:
                 for _ in fh:
@@ -311,10 +291,6 @@ def _write_metadata(dest_dir: str, csv_path: str, report: dict, source: str) -> 
         json.dump(meta, fh, indent=2)
     return path
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def ensure_xiiotid(dest_dir: str = DEFAULT_DEST,
                    source: str = "auto",
@@ -419,6 +395,5 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    # Allow both `python src/data/download_xiiotid.py` and `python -m data.download_xiiotid`
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     raise SystemExit(main())
